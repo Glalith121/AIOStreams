@@ -106,7 +106,10 @@ export function evaluateSourceVerdicts(
       ? new Set<string>()
       : normalizeSet(opts.myBackbones, opts.grouping);
   const gateActive = opts.gateMode !== 'off' && myRoots.size > 0;
-  const trustedRoots = normalizeTrustedSet(opts.trustedBackbones, opts.grouping);
+  const trustedRoots = normalizeTrustedSet(
+    opts.trustedBackbones,
+    opts.grouping
+  );
 
   const corroborating = new Set<string>();
   let fullVerdict: BlocklistVerdict | null = null;

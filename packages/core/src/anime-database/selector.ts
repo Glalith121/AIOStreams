@@ -186,7 +186,10 @@ function scoreBySeasonEpisode(
       }
     }
     // Kitsu IMDb-cour mapping. Exact match.
-    if (typeof r.imdb?.fromSeason === 'number' && r.imdb.fromSeason === season) {
+    if (
+      typeof r.imdb?.fromSeason === 'number' &&
+      r.imdb.fromSeason === season
+    ) {
       const fromEpisode = r.imdb.fromEpisode ?? 1;
       if (episode >= fromEpisode) {
         scored.push({
@@ -232,7 +235,10 @@ function scoreBySeasonEpisode(
       }
     }
     // Anime-Lists XML tmdbSeason match.
-    if (typeof r.tmdb?.seasonNumber === 'number' && r.tmdb.seasonNumber === season) {
+    if (
+      typeof r.tmdb?.seasonNumber === 'number' &&
+      r.tmdb.seasonNumber === season
+    ) {
       const fromEpisode = r.tmdb.fromEpisode ?? 1;
       if (episode >= fromEpisode) {
         scored.push({

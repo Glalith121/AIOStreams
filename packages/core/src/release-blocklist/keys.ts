@@ -23,9 +23,7 @@ const SHA1_REGEX = /^[0-9a-f]{40}$/;
 const BTIH_V1_REGEX = /^[0-9a-f]{40}$/;
 const BTIH_V2_REGEX = /^[0-9a-f]{64}$/;
 
-export function torrentKey(
-  infoHash: string | null | undefined
-): string | null {
+export function torrentKey(infoHash: string | null | undefined): string | null {
   if (typeof infoHash !== 'string') return null;
   const hash = infoHash.trim().toLowerCase();
   if (BTIH_V1_REGEX.test(hash) || BTIH_V2_REGEX.test(hash)) {

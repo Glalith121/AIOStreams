@@ -21,10 +21,7 @@ export {
   normalizeBackbone,
 } from './backbone-map.js';
 export { instanceBackbones } from './backbones.js';
-export {
-  evaluateSourceVerdicts,
-  type SourceVerdictRow,
-} from './evaluate.js';
+export { evaluateSourceVerdicts, type SourceVerdictRow } from './evaluate.js';
 export {
   parseNdjson,
   toNativeNdjson,
@@ -36,7 +33,4 @@ export {
 export { isUnsafeRemoteUrl } from './url-safety.js';
 export { applyReleaseBlocklist, blocklistEvalOptions } from './filter.js';
 export { markReleaseDead, retractRelease } from './feedback.js';
-export {
-  ReleaseBlocklistRemoteService,
-  decodeListBody,
-} from './remote.js';
+export { ReleaseBlocklistRemoteService, decodeListBody } from './remote.js';

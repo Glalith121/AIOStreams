@@ -20,9 +20,8 @@ export function BlocklistLayout() {
   const { pathname } = useLocation();
   const snapshot = useBlocklistSnapshot().data;
   const current: BlocklistSectionId =
-    BLOCKLIST_SECTIONS.find(
-      (s) => pathname === `/dashboard/blocklist/${s.id}`
-    )?.id ?? DEFAULT_BLOCKLIST_SECTION;
+    BLOCKLIST_SECTIONS.find((s) => pathname === `/dashboard/blocklist/${s.id}`)
+      ?.id ?? DEFAULT_BLOCKLIST_SECTION;
 
   return (
     <PageWrapper className="p-4 sm:p-8 space-y-6">

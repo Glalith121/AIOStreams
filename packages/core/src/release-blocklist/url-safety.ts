@@ -28,7 +28,7 @@ const BLOCKED_IPV4_RANGES: Array<[number, number]> = [
 function isBlockedIpv4Value(value: number): boolean {
   return BLOCKED_IPV4_RANGES.some(([base, prefix]) => {
     const mask = (-1 << (32 - prefix)) >>> 0;
-    return ((value & mask) >>> 0) === ((base & mask) >>> 0);
+    return (value & mask) >>> 0 === (base & mask) >>> 0;
   });
 }
 
@@ -42,10 +42,7 @@ function mappedIpv4Value(rest: string): number | null {
   const dotted = parseIpv4(rest);
   if (dotted !== null) return dotted;
   const groups = rest.split(':');
-  if (
-    groups.length === 2 &&
-    groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))
-  ) {
+  if (groups.length === 2 && groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) {
     return ((parseInt(groups[0], 16) << 16) | parseInt(groups[1], 16)) >>> 0;
   }
   if (groups.length === 1 && /^[0-9a-f]{1,4}$/.test(groups[0])) {

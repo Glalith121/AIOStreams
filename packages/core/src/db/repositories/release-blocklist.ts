@@ -6,7 +6,10 @@ import {
   type SourceVerdictRow,
 } from '../../release-blocklist/evaluate.js';
 import { dedupeRecords } from '../../release-blocklist/io.js';
-import { isValidReleaseKey, releaseKeyKind } from '../../release-blocklist/keys.js';
+import {
+  isValidReleaseKey,
+  releaseKeyKind,
+} from '../../release-blocklist/keys.js';
 import type {
   BlocklistEntry,
   BlocklistEvalOptions,
@@ -101,7 +104,10 @@ function listToCsv(backbones: readonly string[]): string {
 }
 
 /** Union that preserves "empty means applies everywhere". */
-function mergeBackboneCsv(existing: string, incoming: readonly string[]): string {
+function mergeBackboneCsv(
+  existing: string,
+  incoming: readonly string[]
+): string {
   const current = csvToList(existing);
   const added = incoming.map((b) => b.trim()).filter(Boolean);
   if (current.length === 0 || added.length === 0) return '';
@@ -149,7 +155,10 @@ function requireValidKey(key: string): ReleaseKeyKind {
 
 export function clampRefreshSeconds(value: number): number {
   if (!Number.isFinite(value)) return 86400;
-  return Math.min(MAX_REFRESH_SECONDS, Math.max(MIN_REFRESH_SECONDS, Math.floor(value)));
+  return Math.min(
+    MAX_REFRESH_SECONDS,
+    Math.max(MIN_REFRESH_SECONDS, Math.floor(value))
+  );
 }
 
 const SOURCE_COLUMNS = sql`id, kind, name, url, enabled, trust, refresh_seconds, etag, last_checked, last_updated, status, sort`;
@@ -404,9 +413,7 @@ export class ReleaseBlocklistRepository {
     records: readonly BlocklistRecord[]
   ): Promise<number> {
     const valid = dedupeRecords(
-      records.filter(
-        (r) => isValidReleaseKey(r.k) && isBlocklistVerdict(r.v)
-      )
+      records.filter((r) => isValidReleaseKey(r.k) && isBlocklistVerdict(r.v))
     );
     if (records.length > 0 && valid.length === 0) {
       throw new Error('payload contains no valid blocklist records');
@@ -619,9 +626,7 @@ export class ReleaseBlocklistRepository {
     if (params.verdict) filters.push(sql`e.verdict = ${params.verdict}`);
     if (params.kind) filters.push(sql`kt.kind = ${params.kind}`);
     const where =
-      filters.length > 0
-        ? sql`WHERE ${join(filters, ' AND ')}`
-        : sql``;
+      filters.length > 0 ? sql`WHERE ${join(filters, ' AND ')}` : sql``;
 
     const total = await getDb().count(
       sql`SELECT COUNT(DISTINCT e.key_id)
@@ -766,11 +771,17 @@ export class ReleaseBlocklistRepository {
   static async listOverrides(
     limit: number,
     offset: number
-  ): Promise<{ overrides: Array<{ key: string; createdAt: number }>; total: number }> {
+  ): Promise<{
+    overrides: Array<{ key: string; createdAt: number }>;
+    total: number;
+  }> {
     const total = await getDb().count(
       sql`SELECT COUNT(*) FROM release_blocklist_overrides`
     );
-    const rows = await getDb().query<{ k: string; created_at: number | string }>(
+    const rows = await getDb().query<{
+      k: string;
+      created_at: number | string;
+    }>(
       sql`SELECT k, created_at FROM release_blocklist_overrides
           ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`
     );

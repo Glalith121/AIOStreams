@@ -50,7 +50,7 @@ export const releaseBlocklistSchema = {
     default: false,
     label: 'Public export endpoint',
     description:
-      'Serve this instance\'s blocklist at `/blocklist/export` so other instances can subscribe to it. The list contains only release digests and backbone root domains.',
+      "Serve this instance's blocklist at `/blocklist/export` so other instances can subscribe to it. The list contains only release digests and backbone root domains.",
     env: 'RELEASE_BLOCKLIST_PUBLIC_EXPORT',
     requiresRestart: false,
     secret: false,
