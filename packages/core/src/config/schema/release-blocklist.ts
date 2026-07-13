@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { commaSeparatedList, positiveInt } from './helpers.js';
 import type { RuntimeConfigSection } from '../types.js';
 
+const PUBLIC_EXPORT_UI = { hidden: true } as const;
+
 export const releaseBlocklistSchema = {
   quorum: {
     schema: positiveInt.refine((n) => n <= 20, {
@@ -54,6 +56,7 @@ export const releaseBlocklistSchema = {
     env: 'RELEASE_BLOCKLIST_PUBLIC_EXPORT',
     requiresRestart: false,
     secret: false,
+    ui: PUBLIC_EXPORT_UI,
   },
   publicExportScope: {
     schema: z.enum(['local', 'all']),
@@ -64,6 +67,7 @@ export const releaseBlocklistSchema = {
     env: 'RELEASE_BLOCKLIST_PUBLIC_EXPORT_SCOPE',
     requiresRestart: false,
     secret: false,
+    ui: PUBLIC_EXPORT_UI,
   },
   publicExportPassword: {
     schema: z.string(),
@@ -74,5 +78,22 @@ export const releaseBlocklistSchema = {
     env: 'RELEASE_BLOCKLIST_PUBLIC_EXPORT_PASSWORD',
     requiresRestart: false,
     secret: true,
+    ui: PUBLIC_EXPORT_UI,
   },
 } as const satisfies RuntimeConfigSection;
+
+/** The `releaseBlocklist.*` keys managed by the publishing page's editor. */
+export const PUBLIC_EXPORT_SETTING_KEYS = [
+  'releaseBlocklist.publicExport',
+  'releaseBlocklist.publicExportScope',
+  'releaseBlocklist.publicExportPassword',
+] as const;
+
+export type PublicExportSettingKey =
+  (typeof PUBLIC_EXPORT_SETTING_KEYS)[number];
+
+export function isPublicExportSettingKey(
+  key: string
+): key is PublicExportSettingKey {
+  return (PUBLIC_EXPORT_SETTING_KEYS as readonly string[]).includes(key);
+}

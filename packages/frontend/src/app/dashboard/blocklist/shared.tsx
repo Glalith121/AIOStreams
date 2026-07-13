@@ -87,11 +87,18 @@ export interface Snapshot {
     backboneGrouping: string;
     trustedBackbones: string[];
     publicExport: boolean;
-    publicExportScope: string;
+    publicExportScope: PublishScope;
     publicExportPassword: string;
   };
+  /** Per field, the env var pinning it, or null when it is editable here. */
+  publicExportEnv: Record<PublicExportField, string | null>;
   backbones: { mine: string[]; observed: string[] };
 }
+
+export type PublicExportField =
+  | 'publicExport'
+  | 'publicExportScope'
+  | 'publicExportPassword';
 
 export interface AggregatedEntry {
   key: string;

@@ -14,6 +14,8 @@ import {
   isValidReleaseKey,
   normalizeBackbone,
   parseNdjson,
+  publicExportEnvLocks,
+  savePublicExportSettings,
   splitPublishStatus,
   toNativeNdjson,
   toWardenNdjson,
@@ -243,10 +245,12 @@ async function snapshot() {
       trustedBackbones: settings.trustedBackbones,
       publicExport: settings.publicExport,
       publicExportScope: settings.publicExportScope,
-      publicExportPassword: settings.publicExport
-        ? settings.publicExportPassword
-        : '',
+      // The publishing page both edits this and builds the ?key= subscribe
+      // URLs from it, so it is served in the clear to the (admin-only)
+      // dashboard rather than masked as the generic settings API would.
+      publicExportPassword: settings.publicExportPassword,
     },
+    publicExportEnv: publicExportEnvLocks(),
     backbones: {
       mine: instanceBackbones(),
       observed,
@@ -261,6 +265,55 @@ router.get('/', async (_req, res, next) => {
       .status(200)
       .json(createResponse({ success: true, data: await snapshot() }));
   } catch (err) {
+    next(err);
+  }
+});
+
+const PublicExportSettingsSchema = z
+  .object({
+    publicExport: z.boolean(),
+    publicExportScope: z.enum(['local', 'all']),
+    publicExportPassword: z.string().trim().max(200),
+  })
+  .partial();
+
+// PATCH /dashboard/blocklist/settings - the public export fields, which live on
+// the publishing page rather than the generic settings page.
+router.patch('/settings', async (req, res, next) => {
+  try {
+    const patch = PublicExportSettingsSchema.parse(req.body ?? {});
+    const { updated, requiresRestart, errors } = await savePublicExportSettings(
+      patch,
+      (req as { user?: { username?: string } }).user?.username ?? 'admin'
+    );
+    const ok = Object.keys(errors).length === 0;
+    res.status(ok ? 200 : 422).json(
+      createResponse({
+        success: ok,
+        data: { updated, requiresRestart, settings: await snapshot() },
+        ...(ok
+          ? {}
+          : {
+              error: {
+                code: 'VALIDATION_ERROR',
+                message: 'Some settings could not be saved',
+                issues: errors,
+              },
+            }),
+      })
+    );
+  } catch (err) {
+    if (err instanceof ZodError) {
+      return res.status(422).json(
+        createResponse({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: formatZodError(err, { singleLine: true }),
+          },
+        })
+      );
+    }
     next(err);
   }
 });

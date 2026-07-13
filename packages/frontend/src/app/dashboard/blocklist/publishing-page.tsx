@@ -320,6 +320,7 @@ function PublishingView({
   invalidate: () => void;
 }) {
   const [editorOpen, setEditorOpen] = React.useState(false);
+  const [exportOpen, setExportOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<PublishTargetView>();
   const [pendingDelete, setPendingDelete] = React.useState<PublishTargetView>();
 
@@ -406,7 +407,11 @@ function PublishingView({
               </tr>
             </thead>
             <tbody>
-              <PublicExportRow settings={snapshot.settings} />
+              <PublicExportRow
+                snapshot={snapshot}
+                invalidate={invalidate}
+                onEdit={() => setExportOpen(true)}
+              />
               {snapshot.targets.map((target) => (
                 <tr
                   key={target.id}
@@ -505,6 +510,13 @@ function PublishingView({
           invalidate={invalidate}
         />
       )}
+      {exportOpen && (
+        <PublicExportModal
+          snapshot={snapshot}
+          onClose={() => setExportOpen(false)}
+          invalidate={invalidate}
+        />
+      )}
       <ConfirmationDialog {...confirmDelete} />
     </div>
   );
@@ -519,14 +531,41 @@ function summaryText(target: PublishTargetView): string {
   return '';
 }
 
+type PublicExportPatch = Partial<{
+  publicExport: boolean;
+  publicExportScope: PublishScope;
+  publicExportPassword: string;
+}>;
+
+/** An env-set field is pinned outside the dashboard, so say so where it's shown. */
+function envHelp(envVar: string | null): string | undefined {
+  return envVar ? `Set by ${envVar}; change it in the environment.` : undefined;
+}
+
 /**
  * The pull-based public export shown as a pinned pseudo-target: the same
  * "where is my list available" mental model, but served live from
  * /blocklist/export instead of being pushed anywhere.
  */
-function PublicExportRow({ settings }: { settings: Snapshot['settings'] }) {
+function PublicExportRow({
+  snapshot,
+  invalidate,
+  onEdit,
+}: {
+  snapshot: Snapshot;
+  invalidate: () => void;
+  onEdit: () => void;
+}) {
   const { status } = useStatus();
   const baseUrl = status?.settings?.baseUrl || window.location.origin;
+  const { settings, publicExportEnv: env } = snapshot;
+
+  const toggle = useMutation({
+    mutationFn: (publicExport: boolean) =>
+      api('PATCH /dashboard/blocklist/settings', { body: { publicExport } }),
+    onSuccess: invalidate,
+    onError: (e: any) => toast.error(e?.message ?? 'Update failed'),
+  });
 
   return (
     <tr className="border-t border-[--border]/50 bg-[--subtle]/20">
@@ -553,15 +592,144 @@ function PublicExportRow({ settings }: { settings: Snapshot['settings'] }) {
       <td className="p-3 tabular-nums">—</td>
       <td className="p-3 text-xs text-[--muted]">—</td>
       <td className="p-3 text-xs text-[--muted]">
-        {settings.publicExport
-          ? 'subscribers fetch it directly'
-          : 'disabled — enable under Settings → Release Blocklist'}
+        {settings.publicExport ? 'subscribers fetch it directly' : 'disabled'}
       </td>
-      <td className="p-3 text-xs text-[--muted]">
-        {settings.publicExport ? 'on' : 'off'}
+      <td className="p-3">
+        <span title={envHelp(env.publicExport)}>
+          <Switch
+            value={settings.publicExport}
+            disabled={!!env.publicExport || toggle.isPending}
+            onValueChange={(enabled) => toggle.mutate(enabled)}
+          />
+        </span>
       </td>
-      <td className="p-3" />
+      <td className="p-3">
+        <div className="flex justify-end gap-1">
+          <IconButton
+            size="sm"
+            intent="gray-subtle"
+            icon={<BiPencil />}
+            aria-label="Edit the public export"
+            onClick={onEdit}
+          />
+        </div>
+      </td>
     </tr>
+  );
+}
+
+/** Editor for the three public export settings, which are hidden from the
+ *  generic settings page and only written through this page. */
+function PublicExportModal({
+  snapshot,
+  onClose,
+  invalidate,
+}: {
+  snapshot: Snapshot;
+  onClose: () => void;
+  invalidate: () => void;
+}) {
+  const { settings, publicExportEnv: env } = snapshot;
+  const [enabled, setEnabled] = React.useState(settings.publicExport);
+  const [scope, setScope] = React.useState<PublishScope>(
+    settings.publicExportScope
+  );
+  const [password, setPassword] = React.useState(settings.publicExportPassword);
+
+  const save = useMutation({
+    mutationFn: (patch: PublicExportPatch) =>
+      api('PATCH /dashboard/blocklist/settings', { body: patch }),
+    onSuccess: () => {
+      toast.success('Public export updated');
+      onClose();
+      invalidate();
+    },
+    onError: (e: any) => toast.error(e?.message ?? 'Save failed'),
+  });
+
+  // Only changed, non-env-locked fields are sent: the server refuses env-locked
+  // keys, so submitting them unchanged would fail the whole save.
+  const trySave = () => {
+    const patch: PublicExportPatch = {};
+    if (!env.publicExport && enabled !== settings.publicExport) {
+      patch.publicExport = enabled;
+    }
+    if (!env.publicExportScope && scope !== settings.publicExportScope) {
+      patch.publicExportScope = scope;
+    }
+    if (
+      !env.publicExportPassword &&
+      password !== settings.publicExportPassword
+    ) {
+      patch.publicExportPassword = password;
+    }
+    if (Object.keys(patch).length === 0) return onClose();
+    save.mutate(patch);
+  };
+
+  return (
+    <Modal
+      open
+      onOpenChange={(open) => !open && onClose()}
+      title="Public export"
+      description="Serve this instance's blocklist at /blocklist/export so others can subscribe to it directly."
+    >
+      <div className="space-y-3">
+        <Switch
+          side="right"
+          label="Serve the public export"
+          value={enabled}
+          disabled={!!env.publicExport}
+          onValueChange={setEnabled}
+          help={
+            envHelp(env.publicExport) ??
+            'The list contains only release digests and backbone root domains.'
+          }
+        />
+        <Select
+          label="Scope"
+          options={[
+            { label: 'local (own verdicts)', value: 'local' },
+            { label: 'all (every source)', value: 'all' },
+          ]}
+          value={scope}
+          disabled={!!env.publicExportScope}
+          onValueChange={(v) => setScope(v as PublishScope)}
+          help={
+            envHelp(env.publicExportScope) ??
+            'The most a subscriber may ask for. With local, only verdicts this instance recorded first-hand are ever served.'
+          }
+        />
+        <TextInput
+          type="password"
+          label="Password"
+          placeholder="No password"
+          value={password}
+          disabled={!!env.publicExportPassword}
+          onValueChange={setPassword}
+          help={
+            envHelp(env.publicExportPassword) ??
+            'When set, subscribers must pass ?key=<value>. A missing or wrong key gets the same 404 as a disabled export, so the endpoint stays invisible.'
+          }
+        />
+        {scope === 'all' && (
+          <Alert intent="warning">
+            Serving the &quot;all&quot; scope rebroadcasts lists you subscribe
+            to: one upstream verdict can then look independently corroborated to
+            anyone consuming both lists. Prefer &quot;local&quot; unless you are
+            deliberately aggregating.
+          </Alert>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button intent="gray-outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button intent="primary" loading={save.isPending} onClick={trySave}>
+            Save
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
