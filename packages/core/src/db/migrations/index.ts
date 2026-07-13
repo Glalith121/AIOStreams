@@ -11,6 +11,7 @@ import { usenetLibraryPassword } from './0010_usenet_library_password.js';
 import { usenetSpeed } from './0011_usenet_speed.js';
 import { usenetLibraryAliases } from './0012_usenet_library_aliases.js';
 import { releaseBlocklist } from './0013_release_blocklist.js';
+import { releaseBlocklistPublish } from './0014_release_blocklist_publish.js';
 import type { Migration } from './types.js';
 
 export const MIGRATIONS: readonly Migration[] = [
@@ -27,6 +28,7 @@ export const MIGRATIONS: readonly Migration[] = [
   usenetSpeed,
   usenetLibraryAliases,
   releaseBlocklist,
+  releaseBlocklistPublish,
 ];
 
 export type { Migration } from './types.js';

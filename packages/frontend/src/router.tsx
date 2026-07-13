@@ -16,6 +16,7 @@ import {
   BlocklistLayout,
   BlocklistSourcesPage,
   BlocklistEntriesPage,
+  BlocklistPublishingPage,
   UsenetLayout,
   UsenetLibraryPage,
   UsenetStreamsPage,
@@ -213,6 +214,12 @@ const dashboardBlocklistEntriesRoute = createRoute({
   component: BlocklistEntriesPage,
 });
 
+const dashboardBlocklistPublishingRoute = createRoute({
+  getParentRoute: () => dashboardBlocklistRoute,
+  path: 'publishing',
+  component: BlocklistPublishingPage,
+});
+
 const dashboardUsenetRoute = createRoute({
   getParentRoute: () => dashboardRoute,
   path: 'usenet',
@@ -279,6 +286,7 @@ const routeTree = rootRoute.addChildren([
       dashboardBlocklistIndexRoute,
       dashboardBlocklistSourcesRoute,
       dashboardBlocklistEntriesRoute,
+      dashboardBlocklistPublishingRoute,
     ]),
     dashboardUsenetRoute.addChildren([
       dashboardUsenetIndexRoute,

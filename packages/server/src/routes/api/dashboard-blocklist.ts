@@ -6,21 +6,38 @@ import {
   formatZodError,
   ReleaseBlocklistRepository,
   ReleaseBlocklistRemoteService,
+  ReleaseBlocklistPublishRepository,
+  ReleaseBlocklistPublishService,
   decodeListBody,
   instanceBackbones,
   isUnsafeRemoteUrl,
   isValidReleaseKey,
   normalizeBackbone,
   parseNdjson,
+  splitPublishStatus,
   toNativeNdjson,
   toWardenNdjson,
+  applyConfigPatch,
+  artifactFilename,
+  artifactKey,
+  checkArtifactsAgainstCapabilities,
+  decodePublishConfig,
+  encodePublishConfig,
+  getPublishProvider,
+  listPublishProviders,
   BLOCKLIST_VERDICTS,
   BLOCKLIST_TRUSTS,
   LOCAL_SOURCE_ID,
   MIN_REFRESH_SECONDS,
   MAX_REFRESH_SECONDS,
+  MIN_PUBLISH_INTERVAL_SECONDS,
+  MAX_PUBLISH_INTERVAL_SECONDS,
+  PUBLISH_FORMATS,
+  PUBLISH_SCOPES,
   type BlocklistTrust,
   type BlocklistVerdict,
+  type PublishTarget,
+  type PublishTargetState,
   type ReleaseKeyKind,
 } from '@aiostreams/core';
 import { createResponse } from '../../utils/responses.js';
@@ -54,6 +71,48 @@ const PatchSourceSchema = z.object({
   refreshSeconds: RefreshSecondsSchema.optional(),
 });
 
+const PublishIntervalSchema = z
+  .number()
+  .int()
+  .min(MIN_PUBLISH_INTERVAL_SECONDS)
+  .max(MAX_PUBLISH_INTERVAL_SECONDS);
+
+const ArtifactSchema = z.object({
+  format: z.enum(PUBLISH_FORMATS),
+  scope: z.enum(PUBLISH_SCOPES),
+  gzip: z.boolean().default(false),
+});
+
+const ArtifactsSchema = z
+  .array(ArtifactSchema)
+  .min(1)
+  .max(4)
+  .refine(
+    (artifacts) =>
+      new Set(artifacts.map((a) => `${a.format}:${a.scope}`)).size ===
+      artifacts.length,
+    'duplicate format/scope artifact'
+  );
+
+// Provider-specific config is validated against the registry's schema after
+// the provider lookup, so a new provider needs no route changes.
+const CreateTargetSchema = z.object({
+  provider: z.string().min(1),
+  name: z.string().trim().min(1).max(120),
+  intervalSeconds: PublishIntervalSchema.optional(),
+  enabled: z.boolean().optional(),
+  artifacts: ArtifactsSchema,
+  config: z.record(z.string(), z.unknown()),
+});
+
+const PatchTargetSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  enabled: z.boolean().optional(),
+  intervalSeconds: PublishIntervalSchema.optional(),
+  artifacts: ArtifactsSchema.optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
+});
+
 const MarkSchema = z.object({
   key: z.string().trim().min(1).optional(),
   keys: z.array(z.string().trim().min(1)).max(8).optional(),
@@ -70,6 +129,27 @@ function badRequest(res: express.Response, message: string) {
       error: { code: 'BAD_REQUEST', message },
     })
   );
+}
+
+function notFound(res: express.Response, message: string) {
+  return res.status(404).json(
+    createResponse({
+      success: false,
+      error: { code: 'NOT_FOUND', message },
+    })
+  );
+}
+
+/** Key-order-independent serialization for config change detection. */
+function stableJson(value: unknown): string {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>;
+    return `{${Object.keys(obj)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableJson(obj[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function zodMessage(err: unknown): string {
@@ -96,12 +176,50 @@ function validateListUrl(url: string): string | null {
   return null;
 }
 
+/**
+ * Redacted view of a publish target for the SPA: never the config blob or
+ * the token - only the provider's summary.
+ */
+function targetView(target: PublishTarget) {
+  const provider = getPublishProvider(target.provider);
+  const config = decodePublishConfig(target.configEnc);
+  const { status, error } = splitPublishStatus(target.status);
+  return {
+    id: target.id,
+    provider: target.provider,
+    providerLabel: provider?.label ?? target.provider,
+    name: target.name,
+    enabled: target.enabled,
+    intervalSeconds: target.intervalSeconds,
+    lastPushed: target.lastPushed,
+    lastChecked: target.lastChecked,
+    status,
+    error,
+    hasCredential:
+      provider && config ? provider.hasCredential(config as never) : false,
+    ...(config ? {} : { configUnreadable: true }),
+    summary: provider && config ? provider.summarize(config as never) : null,
+    artifacts: target.artifacts.map((spec) => {
+      const state = target.state[artifactKey(spec)];
+      return {
+        format: spec.format,
+        scope: spec.scope,
+        gzip: spec.gzip,
+        filename: artifactFilename(spec),
+        url: state?.url ?? null,
+        pushedAt: state?.pushedAt ?? null,
+      };
+    }),
+  };
+}
+
 async function snapshot() {
-  const [sources, counts, observed, uniqueCounts] = await Promise.all([
+  const [sources, counts, observed, uniqueCounts, targets] = await Promise.all([
     ReleaseBlocklistRepository.getSources(),
     ReleaseBlocklistRepository.getCounts(),
     ReleaseBlocklistRepository.getDistinctBackbones(),
     ReleaseBlocklistRepository.getSourceUniqueCounts(),
+    ReleaseBlocklistPublishRepository.getTargets(),
   ]);
   const settings = appConfig.releaseBlocklist;
   return {
@@ -110,6 +228,13 @@ async function snapshot() {
       ...s,
       url: s.url ? s.url.replace(/\?.*$/, '?…') : s.url,
       uniqueCount: uniqueCounts.get(s.id) ?? 0,
+    })),
+    targets: targets.map(targetView),
+    providers: listPublishProviders().map((p) => ({
+      id: p.id,
+      label: p.label,
+      capabilities: p.capabilities,
+      fields: p.fields,
     })),
     settings: {
       quorum: settings.quorum,
@@ -337,6 +462,172 @@ router.post('/sources/:id/clear', async (req, res, next) => {
 router.post('/sources/:id/refresh', async (req, res, next) => {
   try {
     await ReleaseBlocklistRemoteService.refreshByIds([req.params.id]);
+    res
+      .status(200)
+      .json(createResponse({ success: true, data: await snapshot() }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /dashboard/blocklist/targets - add a publish target. Provider config
+// is validated by the provider itself (may verify the token remotely).
+router.post('/targets', async (req, res, next) => {
+  try {
+    const body = CreateTargetSchema.parse(req.body ?? {});
+    const provider = getPublishProvider(body.provider);
+    if (!provider) {
+      return badRequest(res, `unknown provider "${body.provider}"`);
+    }
+    const capabilityProblem = checkArtifactsAgainstCapabilities(
+      provider,
+      body.artifacts
+    );
+    if (capabilityProblem) return badRequest(res, capabilityProblem);
+    let config: Record<string, unknown>;
+    try {
+      config = (await provider.validateConfig(
+        provider.configSchema.parse(body.config)
+      )) as Record<string, unknown>;
+    } catch (err) {
+      return badRequest(res, zodMessage(err));
+    }
+    await ReleaseBlocklistPublishRepository.addTarget({
+      provider: provider.id,
+      name: body.name,
+      configEnc: encodePublishConfig(config),
+      artifacts: body.artifacts,
+      intervalSeconds: body.intervalSeconds,
+      enabled: body.enabled,
+    });
+    res
+      .status(200)
+      .json(createResponse({ success: true, data: await snapshot() }));
+  } catch (err) {
+    if (err instanceof ZodError) return badRequest(res, zodMessage(err));
+    next(err);
+  }
+});
+
+// PATCH /dashboard/blocklist/targets/:id - edit a publish target. The
+// provider is immutable (delete and recreate to change it). Blank
+// credential fields keep the stored values; a changed config resets the
+// per-artifact push state so the next run pushes to the new destination.
+router.patch('/targets/:id', async (req, res, next) => {
+  try {
+    const target = await ReleaseBlocklistPublishRepository.getTarget(
+      req.params.id
+    );
+    if (!target) return notFound(res, 'no such publish target');
+    const body = PatchTargetSchema.parse(req.body ?? {});
+    const provider = getPublishProvider(target.provider);
+    if (!provider) {
+      return badRequest(res, `unknown provider "${target.provider}"`);
+    }
+    if (body.artifacts !== undefined) {
+      const capabilityProblem = checkArtifactsAgainstCapabilities(
+        provider,
+        body.artifacts
+      );
+      if (capabilityProblem) return badRequest(res, capabilityProblem);
+    }
+
+    const fields: Parameters<
+      typeof ReleaseBlocklistPublishRepository.updateTarget
+    >[1] = {
+      name: body.name,
+      enabled: body.enabled,
+      intervalSeconds: body.intervalSeconds,
+      artifacts: body.artifacts,
+    };
+
+    let configChanged = false;
+    if (body.config !== undefined) {
+      const current = decodePublishConfig(target.configEnc);
+      let validated: Record<string, unknown>;
+      try {
+        let merged: Record<string, unknown>;
+        if (!current) {
+          // SECRET_KEY rotation recovery: only a complete config can
+          // replace an undecryptable blob.
+          const full = provider.configSchema.safeParse(body.config);
+          if (!full.success) {
+            return badRequest(
+              res,
+              'stored config cannot be decrypted; re-enter the full configuration'
+            );
+          }
+          merged = full.data as Record<string, unknown>;
+        } else {
+          merged = applyConfigPatch(
+            current,
+            provider.configPatchSchema.parse(body.config) as Record<
+              string,
+              unknown
+            >
+          );
+        }
+        validated = (await provider.validateConfig(
+          provider.configSchema.parse(merged)
+        )) as Record<string, unknown>;
+      } catch (err) {
+        return badRequest(res, zodMessage(err));
+      }
+      configChanged = !current || stableJson(validated) !== stableJson(current);
+      fields.configEnc = encodePublishConfig(validated);
+    }
+
+    if (configChanged) {
+      fields.state = {};
+      fields.status = null;
+    } else if (body.artifacts !== undefined) {
+      // Keep push state only for artifacts that survive unchanged; a gzip
+      // toggle changes the remote filename without changing the pre-gzip
+      // hash, so it must force a re-push.
+      const oldByKey = new Map(
+        target.artifacts.map((a) => [artifactKey(a), a])
+      );
+      const state: PublishTargetState = {};
+      for (const spec of body.artifacts) {
+        const key = artifactKey(spec);
+        const old = oldByKey.get(key);
+        const entry = target.state[key];
+        if (old && entry && old.gzip === spec.gzip) state[key] = entry;
+      }
+      fields.state = state;
+    }
+
+    await ReleaseBlocklistPublishRepository.updateTarget(target.id, fields);
+    res
+      .status(200)
+      .json(createResponse({ success: true, data: await snapshot() }));
+  } catch (err) {
+    if (err instanceof ZodError) return badRequest(res, zodMessage(err));
+    next(err);
+  }
+});
+
+// DELETE /dashboard/blocklist/targets/:id - remove a publish target.
+router.delete('/targets/:id', async (req, res, next) => {
+  try {
+    await ReleaseBlocklistPublishRepository.removeTarget(req.params.id);
+    res
+      .status(200)
+      .json(createResponse({ success: true, data: await snapshot() }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /dashboard/blocklist/targets/:id/publish - push now (bypasses the
+// unchanged-content skip).
+router.post('/targets/:id/publish', async (req, res, next) => {
+  try {
+    const target = await ReleaseBlocklistPublishRepository.getTarget(
+      req.params.id
+    );
+    if (!target) return notFound(res, 'no such publish target');
+    await ReleaseBlocklistPublishService.publishOne(target, { force: true });
     res
       .status(200)
       .json(createResponse({ success: true, data: await snapshot() }));

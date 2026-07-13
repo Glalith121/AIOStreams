@@ -12,6 +12,10 @@ import { isBlocklistVerdict, moreSevereVerdict, N_CAP } from './types.js';
  * Warden records have no verdict field and import as `dead`; exports in
  * the warden dialect therefore carry only the dead usenet subset. Unknown
  * JSON fields are ignored in both directions.
+ *
+ * The header `updated` defaults to the newest emitted record timestamp so
+ * an unchanged list serializes to identical bytes (publish targets rely on
+ * this for change detection).
  */
 
 export type BlocklistDialect = 'native' | 'warden';
@@ -119,13 +123,25 @@ export function parseNdjson(
   return { records, invalid, dialect };
 }
 
+function maxRecordAt(
+  records: readonly BlocklistRecord[]
+): number | undefined {
+  let max: number | undefined;
+  for (const record of records) {
+    if (max === undefined || record.at > max) max = record.at;
+  }
+  return max;
+}
+
 export function toNativeNdjson(
   records: readonly BlocklistRecord[],
-  updatedAtUnixSeconds: number = Math.floor(Date.now() / 1000)
+  updatedAtUnixSeconds?: number
 ): string {
-  const lines = [
-    JSON.stringify({ blocklist: 1, updated: updatedAtUnixSeconds }),
-  ];
+  const updated =
+    updatedAtUnixSeconds ??
+    maxRecordAt(records) ??
+    Math.floor(Date.now() / 1000);
+  const lines = [JSON.stringify({ blocklist: 1, updated })];
   for (const record of records) {
     const line: Record<string, unknown> = {
       k: record.k,
@@ -141,11 +157,15 @@ export function toNativeNdjson(
 
 export function toWardenNdjson(
   records: readonly BlocklistRecord[],
-  updatedAtUnixSeconds: number = Math.floor(Date.now() / 1000)
+  updatedAtUnixSeconds?: number
 ): string {
-  const lines = [JSON.stringify({ warden: 1, updated: updatedAtUnixSeconds })];
-  for (const record of records) {
-    if (record.v !== 'dead' || !WD1_KEY_REGEX.test(record.k)) continue;
+  const subset = records.filter(
+    (record) => record.v === 'dead' && WD1_KEY_REGEX.test(record.k)
+  );
+  const updated =
+    updatedAtUnixSeconds ?? maxRecordAt(subset) ?? Math.floor(Date.now() / 1000);
+  const lines = [JSON.stringify({ warden: 1, updated })];
+  for (const record of subset) {
     lines.push(
       JSON.stringify({
         fp: record.k,

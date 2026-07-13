@@ -27,6 +27,7 @@ import {
   requeueInterruptedInspects,
   flushAllDiskCaches,
   ReleaseBlocklistRemoteService,
+  ReleaseBlocklistPublishService,
 } from '@aiostreams/core';
 
 const logger = createLogger('server');
@@ -151,6 +152,21 @@ function registerReleaseBlocklistTasks() {
     destructive: false,
     multiReplica: 'single',
     run: async () => ReleaseBlocklistRemoteService.refreshDue(),
+  });
+  TaskManager.register({
+    id: 'release-blocklist-publish',
+    label: 'Publish blocklist to remote targets',
+    description:
+      'Pushes the release blocklist to configured publish targets ' +
+      '(GitHub gists, repositories, HTTP endpoints) whose per-target ' +
+      'interval has elapsed. Unchanged lists are skipped.',
+    category: 'data-sync',
+    kind: 'scheduled',
+    intervalMs: 15 * 60_000,
+    enabled: true,
+    destructive: false,
+    multiReplica: 'single',
+    run: async () => ReleaseBlocklistPublishService.publishDue(),
   });
 }
 

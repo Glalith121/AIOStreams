@@ -28,6 +28,13 @@ export {
   type BlocklistAggregatedEntry,
 } from './repositories/release-blocklist.js';
 export {
+  ReleaseBlocklistPublishRepository,
+  clampPublishIntervalSeconds,
+  MIN_PUBLISH_INTERVAL_SECONDS,
+  MAX_PUBLISH_INTERVAL_SECONDS,
+  DEFAULT_PUBLISH_INTERVAL_SECONDS,
+} from './repositories/release-blocklist-publish.js';
+export {
   UsenetMetricsRepository,
   type UsenetMetricDelta,
   type UsenetProviderRollup,

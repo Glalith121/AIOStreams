@@ -21,9 +21,66 @@ export interface BlocklistSource {
   uniqueCount: number;
 }
 
+export type PublishFormat = 'native' | 'warden';
+export type PublishScope = 'local' | 'all';
+
+export interface PublishArtifactView {
+  format: PublishFormat;
+  scope: PublishScope;
+  gzip: boolean;
+  filename: string;
+  url: string | null;
+  pushedAt: number | null;
+}
+
+export interface PublishTargetView {
+  id: string;
+  provider: string;
+  providerLabel: string;
+  name: string;
+  enabled: boolean;
+  intervalSeconds: number;
+  lastPushed: number;
+  lastChecked: number;
+  status: string | null;
+  error: string | null;
+  hasCredential: boolean;
+  configUnreadable?: boolean;
+  summary: Record<string, unknown> | null;
+  artifacts: PublishArtifactView[];
+}
+
+export interface PublishProviderField {
+  key: string;
+  label: string;
+  type: 'text' | 'password' | 'select' | 'switch' | 'textarea';
+  required?: boolean;
+  /** Never echoed by the server; blank while editing keeps the stored value. */
+  secret?: boolean;
+  placeholder?: string;
+  editPlaceholder?: string;
+  help?: string;
+  editHelp?: string;
+  options?: Array<{ label: string; value: string }>;
+  default?: string | boolean;
+}
+
+export interface PublishProviderInfo {
+  id: string;
+  label: string;
+  capabilities: {
+    multiFile: boolean;
+    binary: boolean;
+    maxBytesPerFile?: number;
+  };
+  fields: PublishProviderField[];
+}
+
 export interface Snapshot {
   counts: { total: number; overrides: number };
   sources: BlocklistSource[];
+  targets: PublishTargetView[];
+  providers: PublishProviderInfo[];
   settings: {
     quorum: number;
     backboneScope: string;

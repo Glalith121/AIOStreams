@@ -9,6 +9,7 @@ export { CachePage } from '@/app/dashboard/cache/cache-page';
 export { BlocklistLayout } from '@/app/dashboard/blocklist/blocklist-layout';
 export { BlocklistSourcesPage } from '@/app/dashboard/blocklist/sources-page';
 export { BlocklistEntriesPage } from '@/app/dashboard/blocklist/entries-page';
+export { BlocklistPublishingPage } from '@/app/dashboard/blocklist/publishing-page';
 export { UsenetLayout } from '@/app/dashboard/usenet/usenet-layout';
 export { UsenetLibraryPage } from '@/app/dashboard/usenet/library-page';
 export { UsenetStreamsPage } from '@/app/dashboard/usenet/streams-page';

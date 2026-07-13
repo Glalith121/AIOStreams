@@ -76,6 +76,30 @@ At playback the two usenet keys behave differently, on purpose:
 
 - **Export/import**: the dashboard exports NDJSON in the native format or in the Warden format used by nzbdav-based tools, and imports either transparently (gzipped files included). The Warden dialect has no verdict field and only understands `wd1:` fingerprints, so it carries only that `dead` subset; `nh1:` content-hash keys travel in the native format.
 - **Public endpoint**: enable `RELEASE_BLOCKLIST_PUBLIC_EXPORT` to serve your list at `/blocklist/export`, which other instances (or Warden consumers) can subscribe to directly. Set `RELEASE_BLOCKLIST_PUBLIC_EXPORT_PASSWORD` to require `?key=<value>` in the URL, and share the full URL only with instances you want to allow.
+- **Publish targets**: if your instance is not publicly reachable (or you'd rather not hand out its URL), the **Publishing** section of the Blocklists page pushes your list to remote destinations instead, on a per-target interval and on demand. Consumers then subscribe to the destination's URL, never to your instance.
+
+## Publish targets
+
+A target is a destination plus a set of files to upload: any combination of format (native or Warden) and scope (**local** — your own verdicts, the default — or **all** — everything, deduplicated). Unchanged lists are skipped, so an interval push of a quiet list costs nothing.
+
+One provider is supported:
+
+- **GitHub Gist** — leave the gist ID blank and the first push creates the gist (secret by default; note that secret gists are unlisted, not private — anyone with the URL can read them). The shareable `gist.githubusercontent.com/.../raw/...` URL is shown next to each file and always serves the latest revision.
+
+<Callout title="Use fine-grained tokens">
+  The classic `gist` OAuth scope grants read/write access to *all* of your
+  gists. Prefer a GitHub fine-grained personal access token scoped to just the
+  gist account the target writes to. Tokens are stored encrypted with your
+  instance's `SECRET_KEY`.
+</Callout>
+
+<Callout type="warn" title="Republishing the 'all' scope">
+  Publishing the **all** scope rebroadcasts lists you merely subscribe to. To
+  anyone consuming both your list and the original, one upstream verdict then
+  looks like two independent confirmations, which quietly defeats
+  corroborate-trust quorums. Publish **local** unless you are deliberately
+  running an aggregator, and say so if you are.
+</Callout>
 
 <Callout title="Subscribed lists fail closed">
   A refresh that returns an empty or corrupt payload never wipes a source's

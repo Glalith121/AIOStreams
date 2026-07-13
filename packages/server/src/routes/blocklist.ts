@@ -37,12 +37,14 @@ router.get('/export', async (req, res, next) => {
   try {
     const settings = appConfig.releaseBlocklist;
     if (!settings.publicExport) {
-      return res.status(404).send('Not Found');
+      next();
+      return;
     }
     if (settings.publicExportPassword) {
       const key = typeof req.query.key === 'string' ? req.query.key : '';
       if (!key || !passwordMatches(key, settings.publicExportPassword)) {
-        return res.status(404).send('Not Found');
+        next();
+        return;
       }
     }
 
