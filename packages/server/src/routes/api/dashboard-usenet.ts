@@ -14,6 +14,7 @@ import {
   testUsenetProvider,
   runProviderSpeedTest,
   addUsenetNzb,
+  requeueUsenetNzb,
   mintUsenetLibraryToken,
   exportUsenetLibraryNzb,
   UsenetLibraryRepository,
@@ -453,6 +454,81 @@ router.post(
     }
   }
 );
+
+// POST /dashboard/usenet/library/requeue — re-import entries ({ hashes: [...] }):
+// each source NZB is re-fetched and pushed back through the inspect queue,
+// replacing the existing row. A single-entry requeue is a batch of one.
+const MAX_REQUEUE = 200;
+// Each requeue grabs its NZB from the indexer, so the batch is throttled rather
+// than firing every grab at once.
+const REQUEUE_CONCURRENCY = 4;
+
+router.post('/library/requeue', async (req, res, next) => {
+  try {
+    const body = (req.body ?? {}) as { hashes?: unknown };
+    const hashes = [
+      ...new Set(
+        (Array.isArray(body.hashes) ? body.hashes : [])
+          .filter((h): h is string => typeof h === 'string')
+          .map((h) => h.trim())
+          .filter(Boolean)
+      ),
+    ];
+    if (hashes.length === 0) {
+      return res.status(400).json(
+        createResponse({
+          success: false,
+          error: { code: 'BAD_REQUEST', message: 'hashes is required' },
+        })
+      );
+    }
+    if (hashes.length > MAX_REQUEUE) {
+      return res.status(400).json(
+        createResponse({
+          success: false,
+          error: {
+            code: 'BAD_REQUEST',
+            message: `at most ${MAX_REQUEUE} entries can be requeued at once`,
+          },
+        })
+      );
+    }
+
+    let cursor = 0;
+    let requeued = 0;
+    const errors: string[] = [];
+    await Promise.all(
+      Array.from(
+        { length: Math.min(REQUEUE_CONCURRENCY, hashes.length) },
+        async () => {
+          while (cursor < hashes.length) {
+            const hash = hashes[cursor++];
+            try {
+              await requeueUsenetNzb(hash);
+              requeued++;
+            } catch (err) {
+              errors.push(
+                err instanceof Error ? err.message : 'failed to requeue'
+              );
+            }
+          }
+        }
+      )
+    );
+    logger.info(
+      { username: username(req), requeued, failed: errors.length },
+      'library entries requeued'
+    );
+    res.status(200).json(
+      createResponse({
+        success: true,
+        data: { requeued, failed: errors.length, error: errors[0] },
+      })
+    );
+  } catch (err) {
+    next(err);
+  }
+});
 
 // GET /dashboard/usenet/library/:hash/play/:fileSel? — minted stream URL.
 // GET /dashboard/usenet/library/:hash/download/:fileSel? — same, as attachment.

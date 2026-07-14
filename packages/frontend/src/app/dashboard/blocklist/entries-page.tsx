@@ -453,7 +453,7 @@ function MarkModal({
   const mark = useMutation({
     mutationFn: () =>
       api('POST /dashboard/blocklist/mark', {
-        body: { key: key.trim(), verdict },
+        body: { releases: [[key.trim()]], verdict },
       }),
     onSuccess: () => {
       toast.success('Release marked');

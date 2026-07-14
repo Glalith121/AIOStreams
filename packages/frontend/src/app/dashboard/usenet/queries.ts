@@ -542,21 +542,50 @@ export function usenetNzbExportUrl(hash: string): string {
 }
 
 /**
- * Mark a library entry's release dead on this instance's blocklist, under
- * every key it is known by. Refetches the library (for the `blocked` flag)
- * and the blocklist pages.
+ * Mark library entries' releases dead on this instance's blocklist, each under
+ * every key it is known by. Entries with no blocklist key are dropped, so the
+ * caller must ensure at least one entry has keys. Refetches the library (for
+ * the `blocked` flag) and the blocklist pages.
  */
 export function useBlockRelease() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (entry: LibraryEntry) =>
+    mutationFn: (entries: LibraryEntry[]) =>
       api('POST /dashboard/blocklist/mark', {
-        body: { keys: releaseBlocklistKeys(entry), verdict: 'dead' },
+        body: {
+          releases: entries
+            .map(releaseBlocklistKeys)
+            .filter((keys) => keys.length > 0),
+          verdict: 'dead',
+        },
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [...ROOT, 'library'] });
       qc.invalidateQueries({ queryKey: ['dashboard', 'blocklist'] });
     },
+  });
+}
+
+export interface RequeueResult {
+  requeued: number;
+  failed: number;
+  /** The first failure's message, when any entry failed. */
+  error?: string;
+}
+
+/**
+ * Re-import library entries: each source NZB is re-fetched and pushed back
+ * through the inspect queue, replacing the existing row. Partial failures come
+ * back in the result rather than as a rejection.
+ */
+export function useRequeueEntries() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (hashes: string[]) =>
+      api<RequeueResult>('POST /dashboard/usenet/library/requeue', {
+        body: { hashes },
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: [...ROOT, 'library'] }),
   });
 }
 

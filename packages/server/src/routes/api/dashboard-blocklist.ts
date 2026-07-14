@@ -115,9 +115,13 @@ const PatchTargetSchema = z.object({
   config: z.record(z.string(), z.unknown()).optional(),
 });
 
+// A release is known by several keys (wd1 fingerprint + nh1 content hash) and
+// is marked under all of them, so a batch of releases is an array of key sets.
 const MarkSchema = z.object({
-  key: z.string().trim().min(1).optional(),
-  keys: z.array(z.string().trim().min(1)).max(8).optional(),
+  releases: z
+    .array(z.array(z.string().trim().min(1)).min(1).max(8))
+    .min(1)
+    .max(200),
   verdict: VerdictSchema,
   backbones: z.array(z.string().trim().min(1)).max(50).optional(),
 });
@@ -767,18 +771,12 @@ router.get('/export', async (req, res, next) => {
   }
 });
 
-// POST /dashboard/blocklist/mark - manual local verdict. A release known by
-// several keys (wd1 fingerprint + nh1 content hash) is marked under all of
-// them.
+// POST /dashboard/blocklist/mark - manual local verdict for one or more
+// releases, each marked under every key it is known by.
 router.post('/mark', async (req, res, next) => {
   try {
     const body = MarkSchema.parse(req.body ?? {});
-    const keys = [
-      ...new Set([...(body.key ? [body.key] : []), ...(body.keys ?? [])]),
-    ];
-    if (keys.length === 0) {
-      return badRequest(res, 'key or keys is required');
-    }
+    const keys = [...new Set(body.releases.flat())];
     if (!keys.every((k) => isValidReleaseKey(k))) {
       return badRequest(
         res,

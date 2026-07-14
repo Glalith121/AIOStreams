@@ -918,6 +918,105 @@ export async function exportUsenetLibraryNzb(
 }
 
 /**
+ * Re-fetch an existing row's source NZB, re-parse it and put it back through
+ * the inspect queue, replacing the row. The row is reset to `queued` here
+ * rather than when the job dispatches, so a requeue that lands behind a busy
+ * inspect queue still reads as pending. Throws if the NZB cannot be re-fetched
+ * or re-parsed, leaving the row as it was.
+ */
+async function requeueEntry(
+  entry: UsenetLibraryEntry,
+  nzbUrl: string,
+  providers: ProviderConfig[],
+  options: Partial<EngineOptions>
+): Promise<void> {
+  const xml = await fetchNzb(nzbUrl);
+  const nzb = await parseNzb(xml);
+  if (entry.password) {
+    nzb.meta = { ...nzb.meta, password: entry.password };
+  }
+  const name =
+    entry.name ??
+    (stripNzbExt(nzbReleaseName(nzb.meta, nzb.files[0]?.filename) ?? '') ||
+      nzb.hash);
+  // The source URL may serve different content than when the row was
+  // created; trust the fresh parse
+  if (nzb.hash !== entry.nzbHash) {
+    await UsenetLibraryRepository.delete(entry.nzbHash).catch(() => {});
+  }
+  if (!nzbUrl.startsWith(LOCAL_NZB_SCHEME)) {
+    await UsenetLibraryRepository.recordAlias(
+      hashNzbUrl(nzbUrl),
+      nzb.hash,
+      nzbUrl
+    ).catch(() => {});
+  }
+  await UsenetLibraryRepository.create({
+    nzbHash: nzb.hash,
+    name,
+    owner: entry.owner,
+    source: 'manual',
+    nzbUrl,
+    category: entry.category,
+    releaseKey: entry.releaseKey,
+  });
+  void importNzbInBackground({
+    nzbHash: nzb.hash,
+    nzb,
+    name,
+    sourceUrl: nzbUrl,
+    owner: entry.owner,
+    category: entry.category,
+    providers,
+    options,
+    startedAt: Date.now(),
+    priority: 'requeue',
+  });
+}
+
+/**
+ * Re-import a library entry on request (the dashboard's requeue). Unlike the
+ * boot sweep this never records a failure on the row: the entry may already be
+ * available, and a dead source URL is no reason to discard what it has.
+ */
+export async function requeueUsenetNzb(nzbHash: string): Promise<void> {
+  const { providers, options } = getUsenetEngineConfig();
+  if (providers.length === 0) {
+    throw new DebridError('no usenet providers are configured', {
+      statusCode: 503,
+      statusText: 'Service Unavailable',
+      code: 'SERVICE_UNAVAILABLE',
+      headers: {},
+      body: null,
+      type: 'api_error',
+    });
+  }
+  const resolved = await UsenetLibraryRepository.getResolved(nzbHash);
+  if (!resolved) {
+    throw new DebridError('library entry not found', {
+      statusCode: 404,
+      statusText: 'Not Found',
+      code: 'NOT_FOUND',
+      headers: {},
+      body: null,
+      type: 'api_error',
+    });
+  }
+  const { entry } = resolved;
+  if (!entry.nzbUrl) {
+    throw new DebridError('this entry has no source NZB to re-import', {
+      statusCode: 400,
+      statusText: 'Bad Request',
+      code: 'BAD_REQUEST',
+      headers: {},
+      body: null,
+      type: 'api_error',
+    });
+  }
+  await requeueEntry(entry, entry.nzbUrl, providers, options);
+}
+
+/**
  * Boot-time recovery for inspects interrupted by a restart. Any row still in
  * `queued`/`inspecting` at startup is stale
  */
@@ -956,41 +1055,7 @@ export async function requeueInterruptedInspects(): Promise<void> {
         continue;
       }
       try {
-        const xml = await fetchNzb(entry.nzbUrl);
-        const nzb = await parseNzb(xml);
-        if (entry.password) {
-          nzb.meta = { ...nzb.meta, password: entry.password };
-        }
-        const name =
-          entry.name ??
-          (stripNzbExt(
-            nzbReleaseName(nzb.meta, nzb.files[0]?.filename) ?? ''
-          ) ||
-            nzb.hash);
-        // The source URL may serve different content than when the row was
-        // created; trust the fresh parse
-        if (nzb.hash !== entry.nzbHash) {
-          await UsenetLibraryRepository.delete(entry.nzbHash).catch(() => {});
-        }
-        if (!entry.nzbUrl.startsWith(LOCAL_NZB_SCHEME)) {
-          await UsenetLibraryRepository.recordAlias(
-            hashNzbUrl(entry.nzbUrl),
-            nzb.hash,
-            entry.nzbUrl
-          ).catch(() => {});
-        }
-        void importNzbInBackground({
-          nzbHash: nzb.hash,
-          nzb,
-          name,
-          sourceUrl: entry.nzbUrl,
-          owner: entry.owner,
-          category: entry.category,
-          providers,
-          options,
-          startedAt: Date.now(),
-          priority: 'requeue',
-        });
+        await requeueEntry(entry, entry.nzbUrl, providers, options);
         requeued++;
       } catch (err) {
         logger.warn(
