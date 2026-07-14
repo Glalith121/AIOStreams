@@ -61,12 +61,10 @@ These are validated at startup and cannot be set from the dashboard.
 
 ### Logging
 
-These configure the logger
+These configure the logger.
 
 | Variable                 | Default    | Description                                                               |
 | ------------------------ | ---------- | ------------------------------------------------------------------------- |
-| `LOG_LEVEL`              | `info`     | `error`, `warn`, `info`, `http`, `verbose`, `debug`, `silly`.             |
-| `LOG_FORMAT`             | `json`     | `text` or `json`. `json` is recommended for production.                   |
 | `LOG_BUFFER_MAX_BYTES`   | `67108864` | Max bytes of recent log lines kept in memory for the dashboard Logs page. |
 | `LOG_BUFFER_MAX_ENTRIES` | `200000`   | Hard cap on recent log lines kept in memory for the dashboard Logs page.  |
 
@@ -163,9 +161,11 @@ neither the environment variable nor a stored value is present.
 
 ### Logging
 
-| Environment Variable | UI Setting         | Type    | Default | Description                                                                                  |
-| -------------------- | ------------------ | ------- | ------- | -------------------------------------------------------------------------------------------- |
-| `LOG_SENSITIVE_INFO` | Log Sensitive Info | boolean | `false` | When true, sensitive values may appear in logs. Use only for debugging. _(restart required)_ |
+| Environment Variable | UI Setting         | Type    | Default | Description                                                                                                                                                                                                            |
+| -------------------- | ------------------ | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LOG_LEVEL`          | Log Level          | enum    | `info`  | How much detail to log. Takes effect immediately.                                                                                                                                                                      |
+| `LOG_FORMAT`         | Log Format         | enum    | `json`  | How log lines are printed to the console. `json` is recommended for production. Takes effect immediately, so the console carries both shapes across a switch — a log collector parsing JSON will see the pretty lines. |
+| `LOG_SENSITIVE_INFO` | Log Sensitive Info | boolean | `false` | When true, sensitive values may appear in logs. Use only for debugging.                                                                                                                                                |
 
 ## Network
 
