@@ -428,6 +428,17 @@ enum Category {
 const CATEGORIES_CACHE_TTL = Time.Hour;
 
 /**
+ * WebDAV `FileStat` paths are URL-decoded, so characters like `?` and `#`
+ * must be percent-encoded per segment before being placed in a URL.
+ */
+function encodeWebdavPath(path: string): string {
+  return path
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+}
+
+/**
  * Base class for streaming usenet services (NzbDAV, Altmount).
  * These services accept NZBs via a SABnzbd-compatible API and stream content
  * directly from usenet providers via WebDAV, rather than downloading to disk.
@@ -1290,7 +1301,7 @@ export abstract class UsenetStreamService implements UsenetDebridService {
     });
 
     const filePath = selectedFile.path || `${contentPath}/${selectedFile.name}`;
-    const playbackLink = `${this.getPublicWebdavUrlWithAuth()}${filePath}`;
+    const playbackLink = `${this.getPublicWebdavUrlWithAuth()}${encodeWebdavPath(filePath)}`;
 
     this.serviceLogger.debug(`Generated playback link`, { playbackLink });
 
@@ -1432,7 +1443,7 @@ export abstract class UsenetStreamService implements UsenetDebridService {
     });
 
     const filePath = selectedFile.path || `${contentPath}/${selectedFile.name}`;
-    const playbackLink = `${this.getPublicWebdavUrlWithAuth()}${filePath}`;
+    const playbackLink = `${this.getPublicWebdavUrlWithAuth()}${encodeWebdavPath(filePath)}`;
 
     await UsenetStreamService.resolveCache.set(
       cacheKey,
