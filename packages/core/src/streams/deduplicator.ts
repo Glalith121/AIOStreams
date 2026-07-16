@@ -149,6 +149,9 @@ class StreamDeduplicator {
         currentStreamKeyStrings.push(`filename:${normalisedFilename}`);
       }
 
+      const isUsenet =
+        stream.type === 'usenet' || stream.type === 'stremio-usenet';
+
       // Some addons provide fileIdx (to distinguish multiple files
       // within a single torrent), while others don't. This creates an unavoidable trade-off
       // where addons that provide fileIdx will not deduplicate properly with those that don't
@@ -156,17 +159,13 @@ class StreamDeduplicator {
       if (
         deduplicationKeys.includes('infoHash') &&
         stream.torrent?.infoHash &&
-        stream.type !== 'usenet'
+        !isUsenet
       ) {
         currentStreamKeyStrings.push(
           `infoHash:${stream.torrent.infoHash}${stream.torrent.fileIdx ?? 0}`
         );
       }
-      if (
-        deduplicationKeys.includes('infoHash') &&
-        stream.type === 'usenet' &&
-        stream.nzbUrl
-      ) {
+      if (deduplicationKeys.includes('infoHash') && isUsenet && stream.nzbUrl) {
         currentStreamKeyStrings.push(`infoHash:${stream.nzbUrl}`);
       }
 
