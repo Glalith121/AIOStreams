@@ -72,6 +72,7 @@ export interface FilterStatistics {
     requiredAgeRange: Reason;
     excludedFilterCondition: Reason;
     requiredFilterCondition: Reason;
+    includedExpressionReevaluation: Reason;
     size: Reason;
     bitrate: Reason;
     blocklisted: Reason;
@@ -136,6 +137,11 @@ class StreamFilterer {
   private userData: UserData;
   private filterStatistics: FilterStatistics;
   private filterTimings: FilterTimings;
+  /** When true, statistic recording is a no-op (shadow evaluations). */
+  private suppressStatistics = false;
+  /** Ids of streams that survived filter() only through an included stream
+   *  expression, pending re-evaluation on the aggregated set. */
+  private expressionRescuedIds = new Set<string>();
 
   constructor(userData: UserData) {
     this.userData = userData;
@@ -178,6 +184,7 @@ class StreamFilterer {
         requiredAgeRange: { total: 0, details: {} },
         excludedFilterCondition: { total: 0, details: {} },
         requiredFilterCondition: { total: 0, details: {} },
+        includedExpressionReevaluation: { total: 0, details: {} },
         size: { total: 0, details: {} },
         bitrate: { total: 0, details: {} },
         blocklisted: { total: 0, details: {} },
@@ -222,6 +229,7 @@ class StreamFilterer {
     reason: keyof FilterStatistics['removed'],
     detail?: string
   ) {
+    if (this.suppressStatistics) return;
     this.filterStatistics.removed[reason].total++;
     if (detail) {
       this.filterStatistics.removed[reason].details[detail] =
@@ -233,6 +241,7 @@ class StreamFilterer {
     reason: keyof FilterStatistics['included'],
     detail?: string
   ) {
+    if (this.suppressStatistics) return;
     this.filterStatistics.included[reason].total++;
     if (detail) {
       this.filterStatistics.included[reason].details[detail] =
@@ -2267,7 +2276,11 @@ class StreamFilterer {
     >();
     if (hasAnyRegexFilter) {
       const regexTestStart = Date.now();
-      for (const stream of filterableStreams) {
+      // includedWithoutPassthrough streams need decisions too for the shadow
+      // evaluation below
+      for (const stream of filterableStreams.concat(
+        includedWithoutPassthrough
+      )) {
         regexDecisionsMap.set(stream.id, {
           includedByRegex: includedRegexPatterns
             ? testRegexes(stream, includedRegexPatterns)
@@ -2295,6 +2308,23 @@ class StreamFilterer {
     const filterPassStart = Date.now();
     const filteredStreams = filterableStreams.filter(shouldKeepStream);
     filterPassMs = Date.now() - filterPassStart;
+
+    // Included streams skip the filter pass, so shadow-evaluate them (without
+    // recording statistics) to learn which survive only through their
+    // inclusion
+    if (includedWithoutPassthrough.length > 0) {
+      const unfilteredIds = new Set(streams.map((s) => s.id));
+      this.suppressStatistics = true;
+      try {
+        for (const stream of includedWithoutPassthrough) {
+          if (!unfilteredIds.has(stream.id) || !shouldKeepStream(stream)) {
+            this.expressionRescuedIds.add(stream.id);
+          }
+        }
+      } finally {
+        this.suppressStatistics = false;
+      }
+    }
 
     const finalStreams = StreamUtils.mergeStreams([
       ...includedWithoutPassthrough,
@@ -2363,24 +2393,81 @@ class StreamFilterer {
         typeof item === 'string' ? { expression: item, enabled: true } : item;
       if (!enabled) continue;
       const selectedStreams = await selector.select(streams, expression);
-      this.filterStatistics.included.streamExpression.total +=
-        selectedStreams.length;
-      const displayCondition = this.getDisplayCondition(expression);
-      this.filterStatistics.included.streamExpression.details[
-        displayCondition
-      ] =
-        (this.filterStatistics.included.streamExpression.details[
+      if (!this.suppressStatistics) {
+        this.filterStatistics.included.streamExpression.total +=
+          selectedStreams.length;
+        const displayCondition = this.getDisplayCondition(expression);
+        this.filterStatistics.included.streamExpression.details[
           displayCondition
-        ] || 0) + selectedStreams.length;
+        ] =
+          (this.filterStatistics.included.streamExpression.details[
+            displayCondition
+          ] || 0) + selectedStreams.length;
+      }
       selectedStreams.forEach((stream) => streamsToKeep.add(stream.id));
     }
     return streams.filter((stream) => streamsToKeep.has(stream.id));
+  }
+
+  /**
+   * Included stream expressions run inside filter(), i.e. once per fetch
+   * batch (per group, or per addon with dynamic fetching), so rescued streams
+   * survive batch-level filtering and stay visible to group conditions.
+   * Set-level selectors (slice, count conditionals, ...) therefore see one
+   * batch at a time; re-evaluate the expressions against the aggregated
+   * result set and drop rescued streams whose inclusion does not hold
+   * globally.
+   */
+  private async reevaluateIncludedStreamExpressions(
+    streams: ParsedStream[],
+    context: StreamContext
+  ): Promise<ParsedStream[]> {
+    if (this.expressionRescuedIds.size === 0) {
+      return streams;
+    }
+    let globallyIncluded: ParsedStream[];
+    this.suppressStatistics = true;
+    try {
+      globallyIncluded = await this.applyIncludedStreamExpressions(
+        streams,
+        context
+      );
+    } catch (error) {
+      logger.error(
+        `Failed to re-evaluate included stream expressions on the full result set: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return streams;
+    } finally {
+      this.suppressStatistics = false;
+    }
+    const globallyIncludedIds = new Set(globallyIncluded.map((s) => s.id));
+    const keptStreams = streams.filter((stream) => {
+      if (
+        !this.expressionRescuedIds.has(stream.id) ||
+        globallyIncludedIds.has(stream.id)
+      ) {
+        return true;
+      }
+      this.incrementRemovalReason(
+        'includedExpressionReevaluation',
+        'no longer selected on the full result set'
+      );
+      return false;
+    });
+    this.expressionRescuedIds.clear();
+    if (keptStreams.length !== streams.length) {
+      logger.info(
+        `${streams.length - keptStreams.length} batch-included streams removed after re-evaluating included stream expressions on the full result set`
+      );
+    }
+    return keptStreams;
   }
 
   public async applyStreamExpressionFilters(
     streams: ParsedStream[],
     context: StreamContext
   ): Promise<ParsedStream[]> {
+    streams = await this.reevaluateIncludedStreamExpressions(streams, context);
     const expressionContext = context.toExpressionContext();
 
     // Collect pin instructions from all selectors
