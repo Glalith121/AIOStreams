@@ -7,6 +7,10 @@
 const RAR_PART = /\.part(\d+)\.rar$/i;
 // `.r00`, `.r01` ... (`.rar` is volume 0, `.r00` is volume 1, etc.)
 const RAR_RNN = /\.r(\d+)$/i;
+// Old-style volume rollover past `.r99`: WinRAR names the next hundreds
+// `.s00..s99`, `.t00..t99`, ... up to `.z99`. Some posters/tools also start a
+// set directly at `.zNN`. Two digits only.
+const RAR_ROLL = /\.([s-z])(\d{2})$/i;
 const RAR_FIRST = /\.rar$/i;
 
 // `.7z.001`, `.7z.002` ...
@@ -18,12 +22,21 @@ const PART_SCHEME: Record<ArchiveKind, RegExp> = {
   '7z': SEVENZIP_PART,
 };
 
+/** Volume ordinal for the old-style rollover extension `.sNN`..`.zNN`. */
+function rollVolumeNumber(letter: string, nn: number): number {
+  return (
+    1 + (letter.toLowerCase().charCodeAt(0) - 'r'.charCodeAt(0)) * 100 + nn
+  );
+}
+
 /** Volume index for a RAR member, or -1 if the name is not part of a RAR set. */
 export function rarVolumeNumber(filename: string): number {
   let m = filename.match(RAR_PART);
   if (m) return parseInt(m[1], 10);
   m = filename.match(RAR_RNN);
   if (m) return parseInt(m[1], 10) + 1;
+  m = filename.match(RAR_ROLL);
+  if (m) return rollVolumeNumber(m[1], parseInt(m[2], 10));
   if (RAR_FIRST.test(filename)) return 0;
   return -1;
 }
@@ -98,6 +111,7 @@ export function archiveBaseName(
   return (
     cut(RAR_PART, 'rar') ??
     cut(RAR_RNN, 'rar') ??
+    cut(RAR_ROLL, 'rar') ??
     cut(RAR_FIRST, 'rar') ??
     cut(SEVENZIP_PART, '7z') ??
     cut(SEVENZIP_FIRST, '7z')
