@@ -63,7 +63,7 @@ export const PARSE_REGEX: PARSE_REGEX = {
   qualities: {
     'BluRay REMUX': createRegex('(bd|br|b|uhd)?remux'),
     BluRay: createRegex(
-      '(?<!remux.*)(bd|blu[ .\\-_]?ray|((bd|br)[ .\\-_]?rip))(?!.*remux)'
+      '(?<!remux.*)((bd|blu[ .\\-_]?ray)([ .\\-_]?rip)?|br[ .\\-_]?rip)(?!.*remux)'
     ),
     'WEB-DL': createRegex('web[ .\\-_]?(dl)?(?![ .\\-_]?(rip|DLRip|cam))'),
     WEBRip: createRegex('web[ .\\-_]?rip'),
