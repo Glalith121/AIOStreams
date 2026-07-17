@@ -696,7 +696,7 @@ class StreamParser {
   ): ParsedStream['service'] | undefined {
     const cleanString = string.replace(/web-?dl/i, '');
     const services = constants.SERVICE_DETAILS;
-    const cachedSymbols = ['+', '⚡', '🚀', 'cached', '🌩️', '📫'];
+    const cachedSymbols = ['⚡', '🚀', 'cached', '🌩️', '📫'];
     const uncachedSymbols = ['⏳', 'download', 'UNCACHED', '☁️'];
     let streamService: ParsedStream['service'] | undefined;
     Object.values(services).forEach((service) => {
@@ -706,14 +706,20 @@ class StreamParser {
         'im'
       );
       // check if the string contains the regex
-      if (regex.test(cleanString)) {
+      const match = cleanString.match(regex);
+      if (match) {
         let cached: boolean = false;
+        const followedByPlus =
+          cleanString[(match.index ?? 0) + match[0].length] === '+';
         // check if any of the uncachedSymbols are in the string
         if (uncachedSymbols.some((symbol) => string.includes(symbol))) {
           cached = false;
         }
         // check if any of the cachedSymbols are in the string
-        else if (cachedSymbols.some((symbol) => string.includes(symbol))) {
+        else if (
+          followedByPlus ||
+          cachedSymbols.some((symbol) => string.includes(symbol))
+        ) {
           cached = true;
         }
 
