@@ -171,6 +171,17 @@ const createNewznabItemSchema = () =>
         .array(z.string())
         .optional()
         .transform((arr) => (arr?.[0] ? Number(arr[0]) : undefined)),
+      prowlarrindexer: z
+        .array(
+          z.object({
+            _: z.string(),
+            $: z.object({ id: z.string() }),
+          })
+        )
+        .optional()
+        .transform((arr) =>
+          arr?.[0] ? { name: arr[0]._, id: arr[0].$.id } : undefined
+        ),
       enclosure: z.array(
         z
           .object({
@@ -197,6 +208,7 @@ const createNewznabItemSchema = () =>
       size: item.size,
       enclosure: item.enclosure,
       newznab: item['newznab:attr'],
+      prowlarrindexer: item.prowlarrindexer,
     }));
 
 // schema for response attributes (offset, total only)

@@ -196,6 +196,7 @@ export class NewznabAddon extends BaseNabAddon<NewznabAddonConfig, NewznabApi> {
         indexer:
           result.newznab?.sourceIndexerName?.toString() ??
           result.newznab?.hydraIndexerName?.toString() ??
+          result.prowlarrindexer?.name ??
           meta.capabilities.server.title,
         size:
           result.size ??
