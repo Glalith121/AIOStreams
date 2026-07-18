@@ -1,3 +1,4 @@
+export * from './damage-policy.js';
 export * from './engine.js';
 export * from './inspect-scheduler.js';
 export * from './tokens.js';

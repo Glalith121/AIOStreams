@@ -349,14 +349,17 @@ export const usenetSchema = {
   },
   damagePolicy: {
     schema: z.enum(['tolerant', 'strict']),
-    default: 'tolerant',
+    default: 'strict',
     label: 'Damage policy',
     description:
-      'What to do when a release has a small amount of damage (a few ' +
-      'missing pieces). **tolerant** (the default) imports it anyway, ' +
-      'marked as “degraded” — playback skips over the gaps, which may show ' +
-      'as a brief glitch. **strict** rejects it so a different release can ' +
-      'be picked instead. Heavily damaged releases are always rejected.',
+      'What to do with slightly damaged releases (a few missing pieces). ' +
+      '**strict** (the default) rejects them when the damage is caught in ' +
+      'time, so another release is picked instead; damage that only shows ' +
+      'up during playback is glitched over, and the release is not ' +
+      'offered again afterwards. **tolerant** keeps damaged releases on ' +
+      'offer, glitching over the gaps on every play. Heavy damage is ' +
+      'always rejected and will stop playback if it only turns up ' +
+      'mid-play.',
     env: 'USENET_DAMAGE_POLICY',
     requiresRestart: false,
     secret: false,

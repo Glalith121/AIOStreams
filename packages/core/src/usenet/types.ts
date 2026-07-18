@@ -92,12 +92,6 @@ export interface EngineOptions {
    */
   verifyBudgetMs: number;
   /**
-   * Verdict for SMALL confirmed damage (within the playback padding caps,
-   * see `holes.ts`): `tolerant` imports as degraded (playback zero-fills),
-   * `strict` fails the import. Damage beyond the caps fails either way.
-   */
-  damagePolicy: 'tolerant' | 'strict';
-  /**
    * Census worker width once an import has returned and the audit continues
    * in the background (the "shadow"). The import-time (blocking) share always
    * uses the full budget: min(40, max(4, {@link maxConcurrentDownloads})).
@@ -147,7 +141,6 @@ export const DEFAULT_ENGINE_OPTIONS: EngineOptions = {
   circuitBreakerCooldownMs: 30_000,
   verifyMode: 'census',
   verifyBudgetMs: 0,
-  damagePolicy: 'tolerant',
   censusShadowConcurrency: 12,
   censusMaxLifetimeMs: 30 * 60_000,
   lazyRarResolution: true,

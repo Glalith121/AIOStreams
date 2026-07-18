@@ -371,10 +371,9 @@ export class UsenetEngine {
    *
    * - fail the import (via `content.availability`, the same funnel the
    *   probe dead-abort uses) when the PRIMARY playback target's confirmed
-   *   damage already exceeds the playback padding caps, when a projection
+   *   damage already exceeds the playback padding caps, or when a projection
    *   from the uniform sample clearly exceeds them and the primary target is
-   *   confirmed damaged, or (strict policy) when ANY confirmed hole touches
-   *   an eligible target's backing set;
+   *   confirmed damaged;
    * - otherwise adopt the still-running census (`content.census`) so the
    *   integration layer finishes it in the background, recording any small
    *   confirmed damage as `content.provisionalHoles` (entry persists as
@@ -413,11 +412,8 @@ export class UsenetEngine {
       snap.longestRun
     );
     const primaryDamaged = runs.length > 0;
-    const strict = this.options.damagePolicy === 'strict';
     const failed =
-      observed === 'failed' ||
-      (projected === 'failed' && primaryDamaged) ||
-      (strict && snap.missing > 0);
+      observed === 'failed' || (projected === 'failed' && primaryDamaged);
     logger.debug(
       {
         nzbHash: nzb.hash,
@@ -428,7 +424,6 @@ export class UsenetEngine {
         observed,
         projected,
         complete: snap.complete,
-        strict,
         failed,
       },
       'census blocking verdict'
@@ -1065,6 +1060,11 @@ export class UsenetEngine {
       this.pool.downloadsOnWire > 0 ||
       this.liveCensus.size > 0
     );
+  }
+
+  /** Whether a read stream is currently open for the given NZB. */
+  hasLiveStream(nzbHash: string): boolean {
+    return this.stats.hasStreamForHash(nzbHash);
   }
 
   /**

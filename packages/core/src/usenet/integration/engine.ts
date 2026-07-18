@@ -82,7 +82,6 @@ export function buildUsenetEngineOptions(
     strictArchiveMembership: u.strictArchiveMembership,
     verifyMode: u.verifyMode,
     verifyBudgetMs: u.verifyBudgetMs,
-    damagePolicy: u.damagePolicy,
     censusShadowConcurrency: u.censusShadowConcurrency,
     censusMaxLifetimeMs: u.censusMaxLifetime * 1000,
   };

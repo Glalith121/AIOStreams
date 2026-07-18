@@ -40,6 +40,7 @@ import {
 import { nzbContentKey } from '../../release-blocklist/keys.js';
 import { usenetEngineRegistry, getUsenetEngineConfig } from './engine.js';
 import { fetchNzb, parseNzbCached, canonicaliseNzbHash } from './library.js';
+import { noteStreamActivity, pruneStreamActivity } from './damage-policy.js';
 
 const logger = createLogger('usenet/stream');
 
@@ -85,6 +86,7 @@ interface UsenetStreamSession {
   stream: SeekableStream;
   size: number;
   filename: string;
+  hash: string;
   lastUsedAt: number;
   lastModified: Date;
   engine: UsenetEngine;
@@ -108,6 +110,7 @@ const sessionEvictionTimer = setInterval(() => {
       streamSessions.delete(key);
     }
   }
+  pruneStreamActivity(now);
 }, 30_000);
 sessionEvictionTimer.unref?.();
 
@@ -374,6 +377,8 @@ async function getStreamSession(
     // hash. Every library read/write below
     // must use the canonical hash or it would patch/poison a stray row.
     const hash = await canonicaliseNzbHash(decoded.hash, nzb, decoded.nzb);
+    // Legacy tokens carry a pre-rekey hash; stickiness is keyed canonically.
+    noteStreamActivity(hash);
     const engine = usenetEngineRegistry.get(providers, options);
     // Fetched up-front: seeds the hole hooks (persisted hole map → replay
     // pre-pad) and provides addedAt for Last-Modified below.
@@ -485,6 +490,7 @@ async function getStreamSession(
       stream,
       size: stream.size(),
       filename,
+      hash,
       lastUsedAt: Date.now(),
       lastModified,
       engine,
@@ -547,6 +553,7 @@ export async function openNativeUsenetStream(opts: {
     });
   }
 
+  noteStreamActivity(decoded.hash);
   const session = await getStreamSession(decoded, providers, options);
   opts.signal?.throwIfAborted();
   const { size, filename } = session;
@@ -555,6 +562,7 @@ export async function openNativeUsenetStream(opts: {
 
   const stream = session.stream.createReadStream({ start, end });
   if (opts.signal) addAbortSignal(opts.signal, stream);
+  stream.once('close', () => noteStreamActivity(session.hash));
 
   return {
     stream,

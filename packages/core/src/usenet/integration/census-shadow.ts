@@ -144,7 +144,6 @@ export function spawnCensusShadow(args: {
       );
       return;
     }
-    const strict = engine.options.damagePolicy === 'strict';
     const targets = enumerateTargets(content);
     if (targets.length === 0) return;
 
@@ -163,8 +162,7 @@ export function spawnCensusShadow(args: {
         target,
         snap.holes
       );
-      const verdict = classifyHoles(runs, backingBytes, segBytes);
-      const failed = strict ? runs.length > 0 : verdict === 'failed';
+      const failed = classifyHoles(runs, backingBytes, segBytes) === 'failed';
       if (runs.length > 0) anyHoles = true;
       if (!failed) allFailed = false;
       perTarget.push({ target, runs, failed });
@@ -178,7 +176,6 @@ export function spawnCensusShadow(args: {
         targets: targets.length,
         damaged: perTarget.filter((t) => t.runs.length > 0).length,
         failedTargets: perTarget.filter((t) => t.failed).length,
-        strict,
       },
       'census shadow verdict'
     );

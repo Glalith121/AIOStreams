@@ -378,7 +378,10 @@ async function importNzb(
     releaseKey?: string;
   },
   jobSignal: AbortSignal
-): Promise<UsenetLibraryFile[]> {
+): Promise<{
+  files: UsenetLibraryFile[];
+  status: 'available' | 'degraded';
+}> {
   const { nzbHash, nzb, name, owner, source, nzbUrl } = spec;
   const grabLabel = indexerLabelFor(spec.indexer, nzbUrl);
   // Every terminal exit records exactly one grab outcome; verdict paths record
@@ -555,7 +558,7 @@ async function importNzb(
       engine,
       releaseKey: spec.releaseKey,
     });
-    return files;
+    return { files, status: degraded ? 'degraded' : 'available' };
   } catch (err) {
     if (jobSignal.aborted) {
       // Aborted because every waiter is gone (parallel failover won, players
@@ -588,7 +591,8 @@ async function importNzb(
  * best key for the entry, the canonical row hash when a row was found, else
  * the raw search-time hash; the returned `nzbHash` is the canonical content
  * hash whenever the NZB was actually parsed. `owner` is the authorising user
- * recorded on any new library entry.
+ * recorded on any new library entry. `status` reports the entry's state when
+ * this call learned it.
  */
 export async function resolveFileList(
   playbackInfo: PlaybackInfo & { type: 'usenet' },
@@ -598,7 +602,11 @@ export async function resolveFileList(
   owner: string | undefined,
   cached?: DebridFile[],
   signal?: AbortSignal
-): Promise<{ files: DebridFile[]; nzbHash: string }> {
+): Promise<{
+  files: DebridFile[];
+  nzbHash: string;
+  status?: UsenetLibraryEntry['status'];
+}> {
   if (cached?.length) return { files: cached, nzbHash };
 
   const importStart = Date.now();
@@ -669,7 +677,11 @@ export async function resolveFileList(
     existing.files.length
   ) {
     UsenetLibraryRepository.touch(contentHash).catch(() => {});
-    return { files: existing.files.map(toDebridFile), nzbHash: contentHash };
+    return {
+      files: existing.files.map(toDebridFile),
+      nzbHash: contentHash,
+      status: existing.status,
+    };
   }
 
   const contentKey = nzbContentKey(contentHash);
@@ -700,9 +712,12 @@ export async function resolveFileList(
   }
   const existedBefore = !!existing;
 
-  let libFiles: UsenetLibraryFile[];
+  let imported: {
+    files: UsenetLibraryFile[];
+    status: 'available' | 'degraded';
+  };
   try {
-    libFiles = await inspectScheduler.schedule({
+    imported = await inspectScheduler.schedule({
       contentHash,
       priority: 'interactive',
       signal,
@@ -731,7 +746,11 @@ export async function resolveFileList(
   } catch (err) {
     throw toDebridError(err);
   }
-  return { files: libFiles.map(toDebridFile), nzbHash: contentHash };
+  return {
+    files: imported.files.map(toDebridFile),
+    nzbHash: contentHash,
+    status: imported.status,
+  };
 }
 
 /**

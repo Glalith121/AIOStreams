@@ -21,6 +21,8 @@ import {
   addUsenetNzb,
   resolveFileList,
   selectStreamFile,
+  shouldSkipDegraded,
+  hasRecentStreamActivity,
 } from '../usenet/integration/index.js';
 import {
   ReleaseBlocklistRepository,
@@ -85,7 +87,9 @@ export class NativeUsenetService implements UsenetDebridService {
    * Availability is proven on demand by the engine, so any NZB we have not seen
    * is reported as `cached` (playable). Previously-resolved NZBs are reported
    * with `library: true` plus their stored streamable file list, and previously-
-   * failed NZBs are reported as `failed` so the caller skips them. Lookups are
+   * failed NZBs are reported as `failed` so the caller skips them. Under the
+   * strict damage policy, `degraded` entries are reported the same way so
+   * damaged releases drop out of results in favour of clean ones. Lookups are
    * keyed by whatever hash the search minted (`hashNzbUrl`) and resolved
    * through the alias table onto content-hash-keyed library rows, so a post
    * that failed via one indexer is reported failed for every indexer's URL of
@@ -111,13 +115,17 @@ export class NativeUsenetService implements UsenetDebridService {
       }
     );
 
+    const policy = appConfig.usenet.damagePolicy;
     return nzbs.map(({ name, hash }) => {
       const entry = hash ? library.get(hash) : undefined;
-      if (entry?.status === 'failed') {
+      if (
+        entry?.status === 'failed' ||
+        shouldSkipDegraded(entry?.status, policy)
+      ) {
         return {
           id: hash ?? name ?? 'unknown',
           hash,
-          name: entry.name ?? name,
+          name: entry?.name ?? name,
           status: 'failed' as const,
           library: true,
         };
@@ -139,6 +147,21 @@ export class NativeUsenetService implements UsenetDebridService {
         library: !!entry,
         files,
       };
+    });
+  }
+
+  /**
+   * Retryable 404 for a degraded entry hidden by the strict damage policy
+   */
+  private throwDegradedSkipped(hash: string): never {
+    logger.debug({ hash }, 'skipping nzb: degraded under strict damage policy');
+    throw new DebridError('release is degraded and damage policy is strict', {
+      statusCode: 404,
+      statusText: 'Not Found',
+      code: 'NOT_FOUND',
+      headers: {},
+      body: null,
+      type: 'api_error',
     });
   }
 
@@ -243,6 +266,19 @@ export class NativeUsenetService implements UsenetDebridService {
       });
     }
 
+    // The strict lens skips degraded entries unless this content is being
+    // streamed right now
+    const policy = appConfig.usenet.damagePolicy;
+    if (
+      shouldSkipDegraded(
+        existing?.status,
+        policy,
+        hasRecentStreamActivity(resolved?.contentHash ?? nzbHash)
+      )
+    ) {
+      this.throwDegradedSkipped(nzbHash);
+    }
+
     if (
       playbackInfo.releaseKey &&
       (await ReleaseBlocklistRepository.isLocallyBlocked(
@@ -266,7 +302,11 @@ export class NativeUsenetService implements UsenetDebridService {
       });
     }
 
-    const { files, nzbHash: contentHash } = await resolveFileList(
+    const {
+      files,
+      nzbHash: contentHash,
+      status,
+    } = await resolveFileList(
       playbackInfo,
       resolved?.contentHash ?? nzbHash,
       providers,
@@ -282,6 +322,18 @@ export class NativeUsenetService implements UsenetDebridService {
         : undefined,
       signal
     );
+
+    // The import (or rekey) may have just revealed a degraded entry.
+    const entryStatus = status ?? existing?.status;
+    if (
+      shouldSkipDegraded(
+        entryStatus,
+        policy,
+        hasRecentStreamActivity(contentHash)
+      )
+    ) {
+      this.throwDegradedSkipped(contentHash);
+    }
 
     const selected = await selectStreamFile(playbackInfo, filename, files);
     if (!selected) {
@@ -334,6 +386,15 @@ export class NativeUsenetService implements UsenetDebridService {
     return libraryEntryToDownload(entry);
   }
 
+  /** Entry projection with the strict lens applied. */
+  private entryToDownload(entry: UsenetLibraryEntry): DebridDownload {
+    const download = libraryEntryToDownload(entry);
+    if (shouldSkipDegraded(entry.status, appConfig.usenet.damagePolicy)) {
+      download.status = 'failed';
+    }
+    return download;
+  }
+
   /**
    * List previously-added/resolved library entries (drives the built-in library
    * addon's catalog). With an `id`, returns just that entry.
@@ -342,13 +403,13 @@ export class NativeUsenetService implements UsenetDebridService {
     this.assertAuthorised();
     if (id) {
       const entry = (await UsenetLibraryRepository.getResolved(id))?.entry;
-      return entry ? [libraryEntryToDownload(entry)] : [];
+      return entry ? [this.entryToDownload(entry)] : [];
     }
     const { entries } = await UsenetLibraryRepository.list({
       group: 'all',
       limit: 500,
     });
-    return entries.map(libraryEntryToDownload);
+    return entries.map((entry) => this.entryToDownload(entry));
   }
 
   /** Fetch a single library entry (file list included) by NZB hash. */
@@ -365,7 +426,7 @@ export class NativeUsenetService implements UsenetDebridService {
         type: 'api_error',
       });
     }
-    return libraryEntryToDownload(entry);
+    return this.entryToDownload(entry);
   }
 
   /** Remove a library entry by NZB hash (any alias of it works). */

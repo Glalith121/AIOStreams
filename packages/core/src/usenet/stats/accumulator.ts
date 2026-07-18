@@ -254,6 +254,14 @@ export class StatsAccumulator {
     this.streams.delete(id);
   }
 
+  /** Whether any in-flight read stream serves the given NZB. */
+  hasStreamForHash(nzbHash: string): boolean {
+    for (const s of this.streams.values()) {
+      if (s.nzbHash === nzbHash) return true;
+    }
+    return false;
+  }
+
   /**
    * Streams whose last pushed chunk (or open, if nothing was ever pushed) is
    * at least `thresholdMs` old. Feeds the idle-stream reaper; `now` is

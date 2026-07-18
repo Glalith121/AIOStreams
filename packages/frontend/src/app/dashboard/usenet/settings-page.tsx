@@ -87,7 +87,8 @@ const SECTIONS: { title: string; leaves: string[]; note?: string }[] = [
     ],
     note:
       'When something is imported, AIOStreams checks that it can actually be downloaded from your providers — so broken or incomplete releases are caught up front instead of failing mid-playback. ' +
-      'The checks run alongside the import, so they normally add no waiting time: badly damaged releases are rejected, slightly damaged ones can still play (the damage policy below decides), and any checking that did not finish during the import simply continues in the background. ' +
+      'The checks run alongside the import, so they normally add no waiting time: badly damaged releases are rejected, slightly damaged ones are recorded as “degraded”, the damage policy below decides whether those are still offered as streams. Any checking that did not finish during the import simply continues in the background. ' +
+      'A stream that is already playing is never interrupted by these verdicts; they apply from the next playback onwards. ' +
       'Providers that give unreliable answers are detected and ignored automatically.',
   },
   {
