@@ -20,6 +20,17 @@ export interface GrabOptions {
   userAgent?: string | null;
 }
 
+/** The grab URL answered with a non-OK HTTP status. */
+export class GrabHttpError extends Error {
+  constructor(
+    readonly status: number,
+    statusText: string
+  ) {
+    super(`grab returned ${status} ${statusText}`);
+    this.name = 'GrabHttpError';
+  }
+}
+
 /** A grabbed NZB exceeded the configured `usenet.maxNzbSize` cap. */
 export class NzbTooLargeError extends Error {
   constructor(
@@ -88,9 +99,7 @@ class DownloadManager {
       headers: opts.userAgent ? { 'User-Agent': opts.userAgent } : undefined,
     });
     if (!response.ok) {
-      throw new Error(
-        `grab returned ${response.status} ${response.statusText}`
-      );
+      throw new GrabHttpError(response.status, response.statusText);
     }
     // Reject oversized NZBs before buffering when the server declares a
     // length, and again after (the header is optional and unauthenticated).

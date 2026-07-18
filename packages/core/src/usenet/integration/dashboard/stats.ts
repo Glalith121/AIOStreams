@@ -1,6 +1,7 @@
 import { settingsStore } from '../../../config/index.js';
 import {
   UsenetMetricsRepository,
+  UsenetIndexerMetricsRepository,
   type UsenetMetricDelta,
 } from '../../../db/index.js';
 import {
@@ -55,6 +56,34 @@ export interface UsenetProviderStatRow {
   articleShare: number;
 }
 
+/** Per-indexer grab aggregates over the window (import-time outcomes only). */
+export interface UsenetIndexerStatRow {
+  indexer: string;
+  /** ok + degraded + failed. */
+  grabs: number;
+  ok: number;
+  degraded: number;
+  failed: number;
+  /** Subset of failed: articles dead on every provider. */
+  failedMissing: number;
+  /** Subset of failed: the .nzb download from the indexer failed. */
+  failedFetch: number;
+  /** Subset of failedFetch: HTTP 401/403 (blocked / bad API key). */
+  fetchAuth: number;
+  /** Subset of failedFetch: HTTP 429 (rate-limited). */
+  fetchLimited: number;
+  /** (ok + degraded) / grabs. */
+  successRate: number;
+  /** grabs / total grabs across indexers in the window. */
+  grabShare: number;
+  /** Mean .nzb download time; null when nothing was sampled. */
+  avgGrabMs: number | null;
+  /** Mean inspect/import time; null when nothing was sampled. */
+  avgImportMs: number | null;
+  /** Most recent grab-fetch error, regardless of window. */
+  lastError?: { status?: number; message: string; atMs: number };
+}
+
 export interface UsenetThroughputPoint {
   bucketMs: number;
   articles: number;
@@ -87,6 +116,7 @@ export interface UsenetStatsOverview {
     avgBytesPerSec: number;
   };
   providers: UsenetProviderStatRow[];
+  indexers: UsenetIndexerStatRow[];
   throughput: UsenetThroughputPoint[];
   firstSeenAt?: number;
 }
@@ -182,7 +212,11 @@ export async function pruneUsenetMetrics(
   retentionDays: number
 ): Promise<number> {
   const cutoff = Date.now() - retentionDays * DAY_MS;
-  return UsenetMetricsRepository.pruneOlderThan(cutoff);
+  const [providerRows, indexerRows] = await Promise.all([
+    UsenetMetricsRepository.pruneOlderThan(cutoff),
+    UsenetIndexerMetricsRepository.pruneOlderThan(cutoff),
+  ]);
+  return providerRows + indexerRows;
 }
 
 /**
@@ -270,11 +304,14 @@ export async function getUsenetStatsOverview(
   const { live, pool, cache } = getUsenetLiveStats();
   const poolById = new Map(pool.providers.map((p) => [p.id, p]));
 
-  const [summary, series, firstSeenAt] = await Promise.all([
-    UsenetMetricsRepository.summaryByProvider(sinceMs),
-    UsenetMetricsRepository.timeSeries(sinceMs, bucketMs),
-    UsenetMetricsRepository.firstHour(),
-  ]);
+  const [summary, series, firstSeenAt, indexerSummary, indexerErrors] =
+    await Promise.all([
+      UsenetMetricsRepository.summaryByProvider(sinceMs),
+      UsenetMetricsRepository.timeSeries(sinceMs, bucketMs),
+      UsenetMetricsRepository.firstHour(),
+      UsenetIndexerMetricsRepository.summaryByIndexer(sinceMs),
+      UsenetIndexerMetricsRepository.lastErrors(),
+    ]);
   const summaryById = new Map(summary.map((s) => [s.providerId, s]));
 
   const totalArticles = summary.reduce((s, p) => s + p.articles, 0);
@@ -351,6 +388,40 @@ export async function getUsenetStatsOverview(
   // Sort by usage desc, keeping configured-but-idle providers after active ones.
   providers.sort((a, b) => b.articles - a.articles || a.priority - b.priority);
 
+  const lastErrorByIndexer = new Map(
+    indexerErrors.map((e) => [e.indexer, e])
+  );
+  const totalGrabs = indexerSummary.reduce((s, i) => s + i.grabs, 0);
+  const indexers: UsenetIndexerStatRow[] = indexerSummary
+    .map((agg) => {
+      const err = lastErrorByIndexer.get(agg.indexer);
+      return {
+        indexer: agg.indexer,
+        grabs: agg.grabs,
+        ok: agg.ok,
+        degraded: agg.degraded,
+        failed: agg.failed,
+        failedMissing: agg.failedMissing,
+        failedFetch: agg.failedFetch,
+        fetchAuth: agg.fetchAuth,
+        fetchLimited: agg.fetchLimited,
+        successRate: agg.grabs > 0 ? (agg.ok + agg.degraded) / agg.grabs : 0,
+        grabShare: totalGrabs > 0 ? agg.grabs / totalGrabs : 0,
+        avgGrabMs:
+          agg.grabSamples > 0
+            ? Math.round(agg.sumGrabMs / agg.grabSamples)
+            : null,
+        avgImportMs:
+          agg.importSamples > 0
+            ? Math.round(agg.sumImportMs / agg.importSamples)
+            : null,
+        lastError: err
+          ? { status: err.status, message: err.message, atMs: err.atMs }
+          : undefined,
+      };
+    })
+    .sort((a, b) => b.grabs - a.grabs);
+
   const throughput: UsenetThroughputPoint[] = series.map((b) => ({
     bucketMs: b.bucketMs,
     articles: b.articles,
@@ -371,6 +442,7 @@ export async function getUsenetStatsOverview(
     cache,
     totals,
     providers,
+    indexers,
     throughput,
     firstSeenAt,
   };

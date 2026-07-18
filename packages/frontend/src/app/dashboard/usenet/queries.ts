@@ -111,6 +111,24 @@ export interface UsenetThroughputPoint {
   avgBytesPerSec: number;
 }
 
+/** Per-indexer grab aggregates over the window (import-time outcomes only). */
+export interface UsenetIndexerStatRow {
+  indexer: string;
+  grabs: number;
+  ok: number;
+  degraded: number;
+  failed: number;
+  failedMissing: number;
+  failedFetch: number;
+  fetchAuth: number;
+  fetchLimited: number;
+  successRate: number;
+  grabShare: number;
+  avgGrabMs: number | null;
+  avgImportMs: number | null;
+  lastError?: { status?: number; message: string; atMs: number };
+}
+
 export interface UsenetStatsOverview {
   window: UsenetWindow;
   generatedAt: number;
@@ -128,6 +146,7 @@ export interface UsenetStatsOverview {
     avgBytesPerSec: number;
   };
   providers: UsenetProviderStatRow[];
+  indexers: UsenetIndexerStatRow[];
   throughput: UsenetThroughputPoint[];
   firstSeenAt?: number;
 }

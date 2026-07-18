@@ -755,6 +755,7 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
             title: torrentOrNzb.title,
             hash: torrentOrNzb.hash,
             releaseKey: torrentOrNzb.releaseKey,
+            indexer: torrentOrNzb.indexer,
             index: torrentOrNzb.file.index,
             easynewsUrl:
               torrentOrNzb.service?.id === 'easynews'

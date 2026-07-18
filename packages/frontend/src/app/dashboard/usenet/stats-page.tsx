@@ -17,6 +17,7 @@ import {
   type UsenetWindow,
   type ProviderState,
   type UsenetProviderStatRow,
+  type UsenetIndexerStatRow,
   type UsenetStatsOverview,
 } from './queries';
 import {
@@ -541,6 +542,209 @@ function ProviderTable({ providers }: { providers: UsenetProviderStatRow[] }) {
   );
 }
 
+/** Last-error recency window for the inline indexer warning icon. */
+const INDEXER_ERROR_RECENT_MS = 24 * 3_600_000;
+
+function indexerFailBreakdown(i: UsenetIndexerStatRow): string {
+  const fetchOther = i.failedFetch - i.fetchAuth - i.fetchLimited;
+  const other = i.failed - i.failedMissing - i.failedFetch;
+  const parts = [
+    i.failedMissing > 0 && `${i.failedMissing} missing on providers`,
+    i.fetchAuth > 0 && `${i.fetchAuth} blocked (401/403)`,
+    i.fetchLimited > 0 && `${i.fetchLimited} rate-limited (429)`,
+    fetchOther > 0 && `${fetchOther} fetch failed`,
+    other > 0 && `${other} other`,
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
+/** Popover shape mirroring {@link ProviderHealthPopover} for grab errors. */
+function indexerErrorInfo(
+  e: NonNullable<UsenetIndexerStatRow['lastError']>
+): { tone: 'bad' | 'warn'; label: string; hint: string } {
+  if (e.status === 401 || e.status === 403) {
+    return {
+      tone: 'bad',
+      label: `Blocked by indexer (HTTP ${e.status})`,
+      hint: 'The indexer refused the NZB download. Check that the API key is valid and the account is in good standing.',
+    };
+  }
+  if (e.status === 429) {
+    return {
+      tone: 'warn',
+      label: 'Rate-limited (HTTP 429)',
+      hint: 'The indexer is rate-limiting NZB downloads, usually because the account hit its daily API or grab limit. This normally clears on its own.',
+    };
+  }
+  return {
+    tone: 'warn',
+    label: e.status ? `Grab failed (HTTP ${e.status})` : 'Grab failed',
+    hint: 'The most recent NZB download from this indexer did not succeed. If this persists, check the indexer URL and its status page.',
+  };
+}
+
+function IndexerErrorPopover({
+  indexer,
+  error,
+  breakdown,
+}: {
+  indexer: string;
+  error: NonNullable<UsenetIndexerStatRow['lastError']>;
+  breakdown?: string;
+}) {
+  const info = indexerErrorInfo(error);
+  return (
+    <Popover
+      modal={false}
+      align="start"
+      className="w-80"
+      trigger={
+        <button
+          type="button"
+          aria-label={`${indexer}: ${info.label}. Show details`}
+          className={cn(
+            'shrink-0 -my-1 p-1 rounded-full transition-opacity hover:opacity-70',
+            info.tone === 'bad' ? 'text-red-500' : 'text-amber-500'
+          )}
+        >
+          <BiErrorCircle className="w-4 h-4" />
+        </button>
+      }
+    >
+      <div className="space-y-2.5">
+        <div className="flex items-center gap-2">
+          <span
+            className={cn(
+              'w-2 h-2 rounded-full shrink-0',
+              info.tone === 'bad' ? 'bg-red-500' : 'bg-amber-500'
+            )}
+          />
+          <span className="text-sm font-semibold">{info.label}</span>
+        </div>
+        <p className="text-xs text-[--muted]">{info.hint}</p>
+        <div className="rounded-[--radius] bg-[--subtle] p-2 space-y-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-xs font-medium">Last grab error</span>
+            <span className="text-xs text-[--muted] shrink-0">
+              {timeAgo(error.atMs)}
+            </span>
+          </div>
+          <p className="text-xs text-[--muted] break-words">{error.message}</p>
+        </div>
+        {breakdown && (
+          <p className="text-xs text-[--muted]">
+            Failed in this window: {breakdown}
+          </p>
+        )}
+      </div>
+    </Popover>
+  );
+}
+
+function IndexerTable({ indexers }: { indexers: UsenetIndexerStatRow[] }) {
+  if (indexers.length === 0) {
+    return (
+      <p className="text-sm text-[--muted]">
+        No grabs recorded in this window yet.
+      </p>
+    );
+  }
+  return (
+    <div className="overflow-x-auto -mx-4 px-4 lg:mx-0 lg:px-0">
+      <table className="w-full text-sm min-w-[720px]">
+        <thead className="text-[--muted] text-xs uppercase">
+          <tr className="text-left border-b border-[--border]">
+            <th className="py-2 pr-3">Indexer</th>
+            <th className="py-2 px-3 text-right">Share</th>
+            <th className="py-2 px-3 text-right">Grabs</th>
+            <th
+              className="py-2 px-3 text-right"
+              title="Grabs whose import produced a streamable entry (degraded included)."
+            >
+              Success
+            </th>
+            <th className="py-2 px-3 text-right">Failed</th>
+            <th
+              className="py-2 px-3 text-right"
+              title="How long the indexer takes to serve the .nzb file itself."
+            >
+              Avg grab
+            </th>
+            <th
+              className="py-2 pl-3 text-right"
+              title="How long the import/inspection of the release took after the grab."
+            >
+              Avg import
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {indexers.map((i) => (
+            <tr key={i.indexer} className="border-b border-[--border]/50">
+              <td className="py-2 pr-3">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">{i.indexer}</span>
+                  {i.lastError &&
+                    Date.now() - i.lastError.atMs < INDEXER_ERROR_RECENT_MS && (
+                      <IndexerErrorPopover
+                        indexer={i.indexer}
+                        error={i.lastError}
+                        breakdown={
+                          i.failed > 0 ? indexerFailBreakdown(i) : undefined
+                        }
+                      />
+                    )}
+                </div>
+              </td>
+              <td className="py-2 px-3 text-right">
+                <div className="flex items-center justify-end gap-2">
+                  <div className="w-16 h-1 rounded-full bg-[--subtle] overflow-hidden">
+                    <div
+                      className="h-full bg-brand"
+                      style={{ width: `${i.grabShare * 100}%` }}
+                    />
+                  </div>
+                  <span className="tabular-nums w-10 text-right">
+                    {formatPercent(i.grabShare)}
+                  </span>
+                </div>
+              </td>
+              <td className="py-2 px-3 text-right tabular-nums">
+                {formatCompact(i.grabs)}
+              </td>
+              <td
+                className={cn(
+                  'py-2 px-3 text-right tabular-nums',
+                  i.grabs > 0 && 1 - i.successRate > 0.1 && 'text-red-500'
+                )}
+                title={
+                  i.degraded > 0
+                    ? `includes ${i.degraded} degraded import${i.degraded === 1 ? '' : 's'}`
+                    : undefined
+                }
+              >
+                {formatPercent(i.successRate)}
+              </td>
+              <td
+                className="py-2 px-3 text-right tabular-nums"
+                title={i.failed > 0 ? indexerFailBreakdown(i) : undefined}
+              >
+                {formatCompact(i.failed)}
+              </td>
+              <td className="py-2 px-3 text-right tabular-nums">
+                {i.avgGrabMs == null ? '—' : formatDurationMs(i.avgGrabMs)}
+              </td>
+              <td className="py-2 pl-3 text-right tabular-nums">
+                {i.avgImportMs == null ? '—' : formatDurationMs(i.avgImportMs)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function StatsSection({ data }: { data: UsenetStatsOverview }) {
   const chartData = data.throughput.map((b) => ({
     t: fmtBucketLabel(b.bucketMs, data.window),
@@ -550,6 +754,11 @@ function StatsSection({ data }: { data: UsenetStatsOverview }) {
     .filter((p) => p.articles > 0)
     .slice(0, 6)
     .map((p) => ({ name: p.name || p.host, value: p.articles }));
+  const totalGrabs = data.indexers.reduce((s, i) => s + i.grabs, 0);
+  const grabShare = data.indexers
+    .filter((i) => i.grabs > 0)
+    .slice(0, 6)
+    .map((i) => ({ name: i.indexer, value: i.grabs }));
 
   return (
     <div className="space-y-6">
@@ -622,6 +831,25 @@ function StatsSection({ data }: { data: UsenetStatsOverview }) {
           </div>
         ) : (
           <ProviderTable providers={data.providers} />
+        )}
+      </Card>
+
+      <Card className="p-4">
+        <h3 className="text-sm font-semibold mb-3">Indexer performance</h3>
+        {grabShare.length > 0 ? (
+          <div className="grid lg:grid-cols-[1fr,240px] gap-6 items-center">
+            <IndexerTable indexers={data.indexers} />
+            <div className="mx-auto w-full max-w-[240px] aspect-square">
+              <DonutChart
+                data={grabShare}
+                centerLabel="grabs"
+                centerValue={formatCompact(totalGrabs)}
+                height={240}
+              />
+            </div>
+          </div>
+        ) : (
+          <IndexerTable indexers={data.indexers} />
         )}
       </Card>
     </div>

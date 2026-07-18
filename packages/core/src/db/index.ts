@@ -40,6 +40,12 @@ export {
   type UsenetProviderRollup,
   type UsenetMetricBucket,
 } from './repositories/usenet-metrics.js';
+export {
+  UsenetIndexerMetricsRepository,
+  type UsenetIndexerGrabDelta,
+  type UsenetIndexerRollup,
+  type UsenetIndexerLastError,
+} from './repositories/usenet-indexer-metrics.js';
 export * from './schemas.js';
 
 export { sql, raw, join, SqlFragment } from './sql.js';

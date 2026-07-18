@@ -223,6 +223,7 @@ const UsenetInfoSchema = BaseFileInfoSchema.extend({
   easynewsUrl: z.string().optional(),
   nzb: z.string(),
   releaseKey: z.string().regex(WD1_KEY_REGEX).optional().catch(undefined),
+  indexer: z.string().optional(),
   type: z.literal('usenet'),
 });
 

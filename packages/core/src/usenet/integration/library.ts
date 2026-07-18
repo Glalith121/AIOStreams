@@ -57,6 +57,12 @@ import {
 } from './naming.js';
 import { encodeUsenetStreamToken } from './tokens.js';
 import { inspectScheduler, type InspectPriority } from './inspect-scheduler.js';
+import {
+  indexerLabelFor,
+  recordGrabOutcome,
+  grabHttpStatus,
+  grabErrorMessage,
+} from './grab-metrics.js';
 
 const logger = createLogger('usenet/library');
 
@@ -358,16 +364,37 @@ async function importNzb(
      * to completion, so they must reach a terminal state.
      */
     internalErrorsFailRow?: boolean;
-    /** Base for `importMs` (manual measures from the add; default dispatch). */
-    startedAt?: number;
+    /** Fetch+parse duration before scheduling; folded into the row's importMs. */
+    prepMs?: number;
     /** Grab/parse timings for the resolve path's phase-breakdown log. */
     timings?: { importStart: number; grabbedAt: number; parsedAt: number };
+    /** Search-time indexer name, when the stream URL carried one. */
+    indexer?: string;
+    /** .nzb download duration for the per-indexer grab metrics. */
+    grabMs?: number;
     /** Shareable release key for blocklist feedback, when the search knew one. */
     releaseKey?: string;
   },
   jobSignal: AbortSignal
 ): Promise<UsenetLibraryFile[]> {
   const { nzbHash, nzb, name, owner, source, nzbUrl } = spec;
+  const grabLabel = indexerLabelFor(spec.indexer, nzbUrl);
+  // Every terminal exit records exactly one grab outcome; verdict paths record
+  // before throwing, the outer catch sweeps up anything unrecorded.
+  let recorded = false;
+  const recordOnce = (
+    outcome: 'ok' | 'degraded' | 'failed',
+    extra?: { errorCode?: string; importMs?: number }
+  ) => {
+    if (recorded) return;
+    recorded = true;
+    recordGrabOutcome({
+      indexer: grabLabel,
+      outcome,
+      grabMs: spec.grabMs,
+      ...extra,
+    });
+  };
   try {
     const engine = usenetEngineRegistry.get(spec.providers, spec.options);
     // Dispatch (not schedule) time, so `importMs` measures the inspect
@@ -398,6 +425,7 @@ async function importNzb(
         name,
         friendly.code
       ).catch(() => {});
+      recordOnce('failed', { errorCode: friendly.code });
       if (err instanceof ArticleNotFoundError && err.allProviders) {
         markReleaseDead(spec.releaseKey, nzbContentKey(nzbHash));
       }
@@ -430,6 +458,7 @@ async function importNzb(
         'nzb failed availability verification'
       );
       markReleaseDead(spec.releaseKey, nzbContentKey(nzbHash));
+      recordOnce('failed', { errorCode: availFail.code });
       throw await failImport(nzbHash, name, availFail.reason, availFail.code, {
         reasonCode: availFail.code,
       });
@@ -471,6 +500,7 @@ async function importNzb(
       if (code === 'missing_on_providers') {
         markReleaseDead(spec.releaseKey, nzbContentKey(nzbHash));
       }
+      recordOnce('failed', { errorCode: code });
       throw await failImport(nzbHash, name, reason, code, {
         byCategory,
         archiveInner,
@@ -483,6 +513,7 @@ async function importNzb(
     // lands as degraded with its per-file hole map attached (playback
     // pre-pads).
     const degraded = attachProvisionalHoles(engine, nzb, content, files);
+    const doneAt = Date.now();
     await UsenetLibraryRepository.upsertAvailable({
       nzbHash,
       name,
@@ -491,7 +522,7 @@ async function importNzb(
       files,
       owner,
       source,
-      importMs: Date.now() - (spec.startedAt ?? inspectStart),
+      importMs: (spec.prepMs ?? 0) + (doneAt - inspectStart),
       nzbUrl,
       password: extractNzbPassword(nzb.meta, name),
       status: degraded ? 'degraded' : 'available',
@@ -499,6 +530,9 @@ async function importNzb(
     }).catch((err) =>
       logger.warn({ err, nzbHash }, 'failed to persist usenet library entry')
     );
+    recordOnce(degraded ? 'degraded' : 'ok', {
+      importMs: doneAt - inspectStart,
+    });
     // The release demonstrably exists (degraded still plays), so any dead
     // verdict for it is wrong.
     retractRelease(spec.releaseKey, nzbContentKey(nzbHash));
@@ -517,19 +551,23 @@ async function importNzb(
     if (jobSignal.aborted) {
       // Aborted because every waiter is gone (parallel failover won, players
       // disconnected): the NZB was never proven unstreamable, so don't leave
-      // a dead "inspecting" row behind for a resolve-created entry.
+      // a dead "inspecting" row behind for a resolve-created entry. The grab
+      // was neither proven good nor bad, so no outcome is recorded either.
       if (spec.deleteOnAbort) {
         UsenetLibraryRepository.delete(nzbHash).catch(() => {});
       }
-    } else if (spec.internalErrorsFailRow && !(err instanceof DebridError)) {
-      // Verdicts above already persisted their failure; anything else would
-      // leave the row wedged in `inspecting`.
-      await UsenetLibraryRepository.markFailed(
-        nzbHash,
-        'Inspection failed unexpectedly',
-        name,
-        'INTERNAL'
-      ).catch(() => {});
+    } else {
+      if (spec.internalErrorsFailRow && !(err instanceof DebridError)) {
+        // Verdicts above already persisted their failure; anything else would
+        // leave the row wedged in `inspecting`.
+        await UsenetLibraryRepository.markFailed(
+          nzbHash,
+          'Inspection failed unexpectedly',
+          name,
+          'INTERNAL'
+        ).catch(() => {});
+      }
+      recordOnce('failed', { errorCode: 'internal' });
     }
     throw err;
   }
@@ -555,9 +593,31 @@ export async function resolveFileList(
   if (cached?.length) return { files: cached, nzbHash };
 
   const importStart = Date.now();
-  const xml = await fetchNzb(playbackInfo.nzb);
+  let xml: Buffer;
+  try {
+    xml = await fetchNzb(playbackInfo.nzb);
+  } catch (err) {
+    recordGrabOutcome({
+      indexer: indexerLabelFor(playbackInfo.indexer, playbackInfo.nzb),
+      outcome: 'failed',
+      errorCode: 'nzb_fetch_failed',
+      httpStatus: grabHttpStatus(err),
+      errorMessage: grabErrorMessage(err),
+    });
+    throw err;
+  }
   const grabbedAt = Date.now();
-  const nzb = await parseNzbCached(nzbHash, xml);
+  let nzb: Nzb;
+  try {
+    nzb = await parseNzbCached(nzbHash, xml);
+  } catch (err) {
+    recordGrabOutcome({
+      indexer: indexerLabelFor(playbackInfo.indexer, playbackInfo.nzb),
+      outcome: 'failed',
+      errorCode: 'nzb_parse_failed',
+    });
+    throw err;
+  }
   const parsedAt = Date.now();
 
   const contentHash = await canonicaliseNzbHash(nzbHash, nzb, playbackInfo.nzb);
@@ -652,6 +712,9 @@ export async function resolveFileList(
             eligibleOnly: true,
             deleteOnAbort: !existedBefore,
             timings: { importStart, grabbedAt, parsedAt },
+            indexer: playbackInfo.indexer,
+            grabMs: grabbedAt - importStart,
+            prepMs: parsedAt - importStart,
             releaseKey: playbackInfo.releaseKey,
           },
           jobSignal
@@ -728,8 +791,9 @@ async function importNzbInBackground(args: {
   category?: string;
   providers: ProviderConfig[];
   options: Partial<EngineOptions>;
-  startedAt: number;
   priority?: InspectPriority;
+  grabMs?: number;
+  prepMs?: number;
 }): Promise<void> {
   try {
     await inspectScheduler.schedule({
@@ -748,7 +812,8 @@ async function importNzbInBackground(args: {
             providers: args.providers,
             options: args.options,
             internalErrorsFailRow: true,
-            startedAt: args.startedAt,
+            prepMs: args.prepMs,
+            grabMs: args.grabMs,
           },
           jobSignal
         ),
@@ -799,8 +864,37 @@ export async function addUsenetNzb(opts: {
   }
 
   const startedAt = Date.now();
-  const xml = opts.xml ?? (await fetchNzb(opts.url!));
-  const nzb = await parseNzb(xml);
+  let xml: string | Buffer;
+  let grabMs: number | undefined;
+  if (opts.xml != null) {
+    xml = opts.xml;
+  } else {
+    try {
+      xml = await fetchNzb(opts.url!);
+    } catch (err) {
+      recordGrabOutcome({
+        indexer: indexerLabelFor(undefined, opts.url),
+        outcome: 'failed',
+        errorCode: 'nzb_fetch_failed',
+        httpStatus: grabHttpStatus(err),
+        errorMessage: grabErrorMessage(err),
+      });
+      throw err;
+    }
+    grabMs = Date.now() - startedAt;
+  }
+  let nzb: Nzb;
+  try {
+    nzb = await parseNzb(xml);
+  } catch (err) {
+    recordGrabOutcome({
+      indexer: indexerLabelFor(undefined, opts.url),
+      outcome: 'failed',
+      errorCode: 'nzb_parse_failed',
+    });
+    throw err;
+  }
+  const prepMs = Date.now() - startedAt;
   // An explicitly supplied password (SABnzbd `addurl&password=`) wins over the
   // NZB's own `<meta password>`: the engine and `extractNzbPassword` both read
   // `nzb.meta.password`, so injecting it here covers inspect + persistence.
@@ -851,7 +945,8 @@ export async function addUsenetNzb(opts: {
     category: opts.category,
     providers,
     options,
-    startedAt,
+    prepMs,
+    grabMs,
   });
 
   return (await UsenetLibraryRepository.get(nzbHash))!;
@@ -930,8 +1025,33 @@ async function requeueEntry(
   providers: ProviderConfig[],
   options: Partial<EngineOptions>
 ): Promise<void> {
-  const xml = await fetchNzb(nzbUrl);
-  const nzb = await parseNzb(xml);
+  const fetchStart = Date.now();
+  let xml: Buffer;
+  try {
+    xml = await fetchNzb(nzbUrl);
+  } catch (err) {
+    recordGrabOutcome({
+      indexer: indexerLabelFor(undefined, nzbUrl),
+      outcome: 'failed',
+      errorCode: 'nzb_fetch_failed',
+      httpStatus: grabHttpStatus(err),
+      errorMessage: grabErrorMessage(err),
+    });
+    throw err;
+  }
+  const grabMs = Date.now() - fetchStart;
+  let nzb: Nzb;
+  try {
+    nzb = await parseNzb(xml);
+  } catch (err) {
+    recordGrabOutcome({
+      indexer: indexerLabelFor(undefined, nzbUrl),
+      outcome: 'failed',
+      errorCode: 'nzb_parse_failed',
+    });
+    throw err;
+  }
+  const prepMs = Date.now() - fetchStart;
   if (entry.password) {
     nzb.meta = { ...nzb.meta, password: entry.password };
   }
@@ -969,8 +1089,9 @@ async function requeueEntry(
     category: entry.category,
     providers,
     options,
-    startedAt: Date.now(),
     priority: 'requeue',
+    prepMs,
+    grabMs,
   });
 }
 
